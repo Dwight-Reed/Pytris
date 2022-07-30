@@ -1,24 +1,20 @@
-"""
-Platformer Game
-"""
-
-from operator import itemgetter
+import copy
 from types import new_class
 import arcade
-from dataclasses import dataclass
-# import numpy
+from dataclasses import dataclass, replace
 import pyglet
 import random
-# import time
+
 # Constants
 SCREEN_WIDTH = 600
 SCREEN_HEIGHT = 1000
 SCREEN_TITLE = "Tetris"
 # Length of each side of a tile
 TILE_SIZE = 40
-# Size of the grid in tiles
+# Size of the grid in tiles, the actual grid is 1 taller than the visibile grid
 GRID_WIDTH = 10
-GRID_HEIGHT = 20
+GRID_HEIGHT = 21
+RENDERED_GRID_HEIGHT = GRID_HEIGHT - 1
 # The Size of the grid lines
 MARGIN = 5
 # Effective tile size, the amount of space a tile takes up including its margins (useful for calculating the space the board takes up)
@@ -36,6 +32,7 @@ PADDING_Y = (SCREEN_HEIGHT - (TILE_SIZE + MARGIN) * GRID_HEIGHT) / 2
 # Basic grid functionality copied from: https://api.arcade.academy/en/latest/examples/array_backed_grid_sprites_1.html#array-backed-grid-sprites-1
 
 # https://tetris.wiki/Super_Rotation_System
+# https://www.youtube.com/watch?v=yIpk5TJ_uaI
 offsets = {
     'I': [
         [[0, 0], [-1, 0], [2, 0], [-1, 0], [2, 0]],
@@ -101,10 +98,10 @@ class settings:
 
 @dataclass
 class active_piece:
-    type = ''
-    center = []
-    tiles = [[0, 0], [0, 0], [0, 0], [0, 0]]
-    rotation = 0
+    type: str
+    center: list[int]
+    tiles: list[list[int]]
+    rotation: int
 
 
 class MyGame(arcade.Window):
@@ -131,7 +128,7 @@ class MyGame(arcade.Window):
 
         # Create a list of solid-color sprites to represent each grid location
         for column in range(GRID_WIDTH):
-            for row in range(GRID_HEIGHT):
+            for row in range(RENDERED_GRID_HEIGHT):
                 x = column * (TILE_SIZE + MARGIN) + \
                     (TILE_SIZE / 2 + MARGIN) + PADDING_X
                 y = row * (TILE_SIZE + MARGIN) + \
@@ -149,43 +146,59 @@ class MyGame(arcade.Window):
             self.grid[i][0] = 'T'
 
         # Adds the placed pieces to the sprite grid (and clears anything else)
-        for row in range(GRID_HEIGHT):
+        for row in range(RENDERED_GRID_HEIGHT):
             for column in range(GRID_WIDTH):
-                self.grid_sprite_list[column * GRID_HEIGHT +
+                self.grid_sprite_list[column * RENDERED_GRID_HEIGHT +
                                       row].color = self.settings.colors[self.grid[column][row]] + (self.settings.normal_opacity,)
 
         # Draws the ghost tiles
         for tile in self.ghost_tiles:
-            if not tile[1] >= GRID_HEIGHT:
-                self.grid_sprite_list[(tile[0] * (GRID_HEIGHT)) + tile[1]
+            if not tile[1] >= RENDERED_GRID_HEIGHT:
+                # print(f"ghost tile = {tile}")
+                self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
                                       ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
 
         # Draws the active piece (overwrites ghost tiles if overlapping)
         for tile in self.active_piece.tiles:
-            if not tile[1] >= GRID_HEIGHT:
-                self.grid_sprite_list[(tile[0] * (GRID_HEIGHT)) + tile[1]
+            if not tile[1] >= RENDERED_GRID_HEIGHT:
+                # print(f"active tile = {tile}")
+                self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
                                       ].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
+
+        # Change opacity of active_piece.center for debugging
+        self.grid_sprite_list[(self.active_piece.center[0] * (RENDERED_GRID_HEIGHT)) + self.active_piece.center[1]
+                              ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
 
     def setup(self):
         # Generate the first bag
         self.bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
         random.shuffle(self.bag)
-        self.bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
 
         # Determines if the player can swap the active piece with their hold
         self.hold_ready = True
-        self.active_piece = active_piece()
+        self.active_piece = active_piece(
+            '', [0, 0], [[0, 0], [0, 0], [0, 0], [0, 0]], 0)
         self.spawn_piece(False)
 
     def on_key_press(self, symbol, modifiers):
+        # TODO clean up and don't crash on boundries
+        valid = True
         if symbol == self.settings.move_left:
             self.active_piece.center[0] -= 1
-            for i, tile in enumerate(self.active_piece.tiles):
-                self.active_piece.tiles[i][0] = tile[0] - 1
+            for i in range(4):
+                if self.active_piece.tiles[i][0] == 0:
+                    valid = False
+            if valid:
+                for i, tile in enumerate(self.active_piece.tiles):
+                    self.active_piece.tiles[i][0] = tile[0] - 1
         elif symbol == self.settings.move_right:
-            self.active_piece.center[0] += 1
-            for i, tile in enumerate(self.active_piece.tiles):
-                self.active_piece.tiles[i][0] = tile[0] + 1
+            for i in range(4):
+                if self.active_piece.tiles[i][0] == 19:
+                    valid = False
+            if valid:
+                self.active_piece.center[0] += 1
+                for i, tile in enumerate(self.active_piece.tiles):
+                    self.active_piece.tiles[i][0] = tile[0] + 1
         elif symbol == self.settings.move_down:
             self.active_piece.center[1] -= 1
             for i, tile in enumerate(self.active_piece.tiles):
@@ -201,17 +214,18 @@ class MyGame(arcade.Window):
             self.rotate_active(2)
 
     def on_draw(self):
-
+        # Clears the grid
         self.clear()
 
-        # Batch draw all the sprites
+        # Update the sprite list
         self.redraw_grid()
+
+        # Batch draw all the sprites
+
         self.grid_sprite_list.draw()
 
     def on_update(self, dt):
         self.update_ghost()
-        # print(f"time={time.time()}")
-        pass
 
     def spawn_piece(self, from_hold: bool):
 
@@ -219,112 +233,78 @@ class MyGame(arcade.Window):
             # Swap active piece and hold
             self.active_piece.type, self.hold = self.hold, self.active_piece
         else:
+            # Remove first type from the bag and set the new piece to that type
             self.active_piece.type = self.bag.pop(0)
-            # if self.active_piece.type != 'I' and self.active_piece.type != 'O':
 
         # Sets the center to be on the top row
         # this will make part of some pieces appear out of bounds, but this is common in modern tetris games
         self.active_piece.center = CENTER_SPAWN
-        self.align_active()
-        # for i, tile in enumerate(spawn_positions[self.active_piece.type]):
-        #     print(f"test {i}")
-        #     self.active_piece.tiles[i] = [
-        #         CENTER_SPAWN[0] + tile[0], CENTER_SPAWN[1] + tile[1]]
 
-        # If the bag has fewer pieces than the preview, generate and append a new bag
+        # Place tiles relative to the center
+        for i, tile in enumerate(spawn_positions[self.active_piece.type]):
+            self.active_piece.tiles[i] = [
+                CENTER_SPAWN[j] + tile[j] for j in range(2)]
+
+        # If the bag has fewer pieces than the preview is set to display, generate and append a new bag
         # Info about bags: https://tetris.wiki/Random_Generator
         if len(self.bag) == self.settings.preview_count:
             self.new_bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
             random.shuffle(self.new_bag)
             self.bag.append(self.new_bag)
 
-        print(self.bag)
-
     def place_piece(self):
         pass
 
     def rotate_active(self, steps: int):
+        # Stores the position of the piece after being rotated
+        rotated_piece = copy.deepcopy(self.active_piece)
+        # Stores the new position
+        new_position = copy.deepcopy(self.active_piece)
+        new_position.rotation = (self.active_piece.rotation + steps) % 4
 
-        init_state = self.active_piece.rotation
-        end_state = (self.active_piece.rotation + steps) % 3
-        # Using SRS https://tetris.wiki/Super_Rotation_System
-        # for i in range(steps):
-        #     for j, tile in enumerate(self.active_piece.tiles):
-        #         self.active_piece.tiles[j] = [x + y for x, y in zip(self.active_piece.center, [
-        #                                                             tile[1] - self.active_piece.center[1], -(tile[0] - self.active_piece.center[0])])]
-        # for i in range():
-        #     self.active_piece.rotation += 1
-        #     if self.active_piece.rotation == 4:
-        #         self.active_piece.rotation = 0
-        # self.align_active()
+        for step in range(steps):
+            for i in range(4):
+                # Rotate pieces around the center | for each tile: new_pos = (y, -x) (relative to center piece)
+                rotated_piece.tiles[i] = [rotated_piece.center[j] + [rotated_piece.tiles[i][1] - rotated_piece.center[1], -(
+                    rotated_piece.tiles[i][0] - rotated_piece.center[0])][j] for j in range(2)]
 
-        for i in range(steps):
-            for j, tile in enumerate(self.active_piece.tiles):
-                self.active_piece.tiles[j] = [x + y for x, y in zip(self.active_piece.center, [tile[1] - self.active_piece.center[1], -(tile[0] - self.active_piece.center[0])])]
+        # Stores the offset data for the current piece type
+        offset_data = offsets[self.active_piece.type]
 
-        success = False
-        for i in range(5):
-            new_tiles = []
-            try_offset = [offsets[self.active_piece.type][init_state][i][j] - offsets[self.active_piece.type][end_state][i][j] for j in range(2)]
-            for j in range(4):
-                new_tiles.append([self.active_piece.tiles[j][k] + try_offset[k] for k in range(2)])
-            for tile in new_tiles:
+        # Run the 5 tests
+        for test in range(5):
+            # Calculate the offset for the current test according to the offset data
+            offset = [offset_data[self.active_piece.rotation][test][i] -
+                      offset_data[new_position.rotation][test][i] for i in range(2)]
+
+            # Set the tile positions according to the offset
+            for i in range(4):
+                new_position.tiles[i] = [
+                    rotated_piece.tiles[i][0] + offset[0], rotated_piece.tiles[i][1] + offset[1]]
+            new_position.center = [rotated_piece.center[0] +
+                                   offset[0], rotated_piece.center[1] + offset[1]]
+
+            # Check if the new tile positions are occupied
+            for check in range(4):
                 try:
-                    if self.grid[tile[0]][tile[1]]:
+                    if self.grid[new_position.tiles[check][0]][new_position.tiles[check][1]]:
                         break
-                # List index out of range (out of bounds)
+                # List index out of range (Out of bounds)
                 except:
                     break
             else:
-                success = True
+                # If all tiles are in free positions, update the active piece; if this block is not executed, the rotation fails
+                self.active_piece = new_position
                 break
 
-        if success:
-            self.active_piece.tiles = new_tiles
-
-        # self.active_piece.tiles[i][j] = self.active_piece.tiles[i][j] - offsets[self.active_piece.type][self.active_piece.rotation][0][j]
-
-
-        # print(self.active_piece.tiles)
-        # for i in range(4):
-        #     for j in range(2):
-        #         # print(offsets[self.active_piece.type][self.active_piece.rotation][0])
-        #         if self.active_piece.tiles[i] == self.active_piece.center:
-        #             self.active_piece.center[j] = offsets[self.active_piece.type][self.active_piece.rotation][0][j]
-        #         self.active_piece.tiles[i][j] = offsets[self.active_piece.type][self.active_piece.rotation][0][j]
-            # self.active_piece.tiles[i] = [self.active_piece.tiles[j] + offsets[self.active_piece.type][self.active_piece.rotation][0][j] for j in range(2)]
-        # self.active_piece.tiles = [offsets[self.active_piece.type][self.active_piece.rotation][0] + self.active_piece.tiles[i] for i in range(4)]
-        # print(self.active_piece.tiles)
-
-    # Adjusts the (true and offset) tile positions for the active piece according to its center
-    def align_active(self):
-
-
-        # Set default true positions
-        for i, tile in enumerate(spawn_positions[self.active_piece.type]):
-            # print(f"test {i}")
-            # use zip
-            self.active_piece.tiles[i] = [
-                CENTER_SPAWN[0] + tile[0], CENTER_SPAWN[1] + tile[1]]
-        # Change true positions to reflect rotation
-        for i in range(self.active_piece.rotation):
-            for j, tile in enumerate(self.active_piece.tiles):
-                self.active_piece.tiles[j] = [x + y for x, y in zip(self.active_piece.center, [tile[1] - self.active_piece.center[1], -(tile[0] - self.active_piece.center[0])])]
-
-        # Set offset positions
-        for i in range(4):
-            for j in range(2):
-                # print(f"align_active {i, j}")
-                self.active_piece.tiles[i][j] = self.active_piece.tiles[i][j] - offsets[self.active_piece.type][self.active_piece.rotation][0][j]
-
-        print(f"true: {self.active_piece.tiles}\noffset: {self.active_piece.tiles}")
-
+    # Updates the current position of the ghost tiles
+    # TODO Chnange to a generic function that returns the position of ghost/placed tile
     def update_ghost(self):
-        # Find the current position of the ghost tiles
+
         self.ghost_tiles = self.active_piece.tiles
         for i in range(1, GRID_HEIGHT):
-            # for j in range(0, 4):
             ghost_candidate = list(
+                # checks if there are any placed tiles immediately below tiles in ghost_candidate
                 map(lambda a: [a[0], a[1] - 1], self.ghost_tiles))
             for tile in ghost_candidate:
                 try:
@@ -344,6 +324,7 @@ def main():
     window = MyGame()
     window.setup()
     arcade.run()
+
 
 def sort_coordinates(e):
     return e[1]

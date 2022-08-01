@@ -1,4 +1,5 @@
 import copy
+from tkinter import Grid
 from types import new_class
 import arcade
 from dataclasses import dataclass, replace
@@ -13,14 +14,14 @@ SCREEN_TITLE = "Tetris"
 TILE_SIZE = 40
 # Size of the grid in tiles, the actual grid is 1 taller than the visibile grid
 GRID_WIDTH = 10
-GRID_HEIGHT = 21
+GRID_HEIGHT = 22
 RENDERED_GRID_HEIGHT = GRID_HEIGHT - 1
 # The Size of the grid lines
 MARGIN = 5
 # Effective tile size, the amount of space a tile takes up including its margins (useful for calculating the space the board takes up)
 EFF_TILE_SIZE = TILE_SIZE + MARGIN
 # The location the center of a new piece spawns at
-CENTER_SPAWN = [4, 19]
+CENTER_SPAWN = [4, 20]
 
 # GRID_BORDER_X = [round(SCREEN_WIDTH / 2 - TILE_SIZE * GRID_WIDTH / 2), round(SCREEN_WIDTH / 2 + TILE_SIZE * GRID_WIDTH / 2)]
 
@@ -73,7 +74,7 @@ class settings:
     move_left = pyglet.window.key.LEFT
     move_right = pyglet.window.key.RIGHT
     move_down = pyglet.window.key.DOWN
-    instant_drop = pyglet.window.key.SPACE
+    hard_drop = pyglet.window.key.SPACE
     hold = pyglet.window.key.MOD_SHIFT
     rotate_clockwise = pyglet.window.key.D
     rotate_counter_clockwise = pyglet.window.key.A
@@ -139,6 +140,8 @@ class MyGame(arcade.Window):
                 sprite.center_y = y
                 self.grid_sprite_list.append(sprite)
 
+        self.ghost_tiles = [[], [], [], []]
+
     # Updates sprite grid to match positions of tiles
 
     def redraw_grid(self):
@@ -172,7 +175,7 @@ class MyGame(arcade.Window):
     def setup(self):
         # Generate the first bag
         self.bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
-        random.shuffle(self.bag)
+        # random.shuffle(self.bag)
 
         # Determines if the player can swap the active piece with their hold
         self.hold_ready = True
@@ -181,37 +184,32 @@ class MyGame(arcade.Window):
         self.spawn_piece(False)
 
     def on_key_press(self, symbol, modifiers):
-        # TODO clean up and don't crash on boundries
-        valid = True
-        if symbol == self.settings.move_left:
-            self.active_piece.center[0] -= 1
-            for i in range(4):
-                if self.active_piece.tiles[i][0] == 0:
-                    valid = False
-            if valid:
-                for i, tile in enumerate(self.active_piece.tiles):
-                    self.active_piece.tiles[i][0] = tile[0] - 1
-        elif symbol == self.settings.move_right:
-            for i in range(4):
-                if self.active_piece.tiles[i][0] == 19:
-                    valid = False
-            if valid:
-                self.active_piece.center[0] += 1
-                for i, tile in enumerate(self.active_piece.tiles):
-                    self.active_piece.tiles[i][0] = tile[0] + 1
-        elif symbol == self.settings.move_down:
-            self.active_piece.center[1] -= 1
-            for i, tile in enumerate(self.active_piece.tiles):
-                self.active_piece.tiles[i][1] = tile[1] - 1
-        elif symbol == self.settings.hold:
+        cfg = self.settings
+
+        if symbol == cfg.move_left:
+            self.move_active(-1, 0)
+
+        elif symbol == cfg.move_right:
+            self.move_active(1, 0)
+
+        elif symbol == cfg.move_down:
+            self.move_active(0, -1)
+
+        elif symbol == cfg.hold:
             if self.hold_ready:
                 self.spawn_piece(True)
-        elif symbol == self.settings.rotate_clockwise:
+
+        elif symbol == cfg.rotate_clockwise:
             self.rotate_active(1)
-        elif symbol == self.settings.rotate_counter_clockwise:
+
+        elif symbol == cfg.rotate_counter_clockwise:
             self.rotate_active(3)
-        elif symbol == self.settings.rotate_flip:
+
+        elif symbol == cfg.rotate_flip:
             self.rotate_active(2)
+
+        elif symbol == cfg.hard_drop:
+            self.place_piece()
 
     def on_draw(self):
         # Clears the grid
@@ -228,7 +226,7 @@ class MyGame(arcade.Window):
         self.update_ghost()
 
     def spawn_piece(self, from_hold: bool):
-
+        print(self.bag)
         if from_hold:
             # Swap active piece and hold
             self.active_piece.type, self.hold = self.hold, self.active_piece
@@ -238,6 +236,7 @@ class MyGame(arcade.Window):
 
         # Sets the center to be on the top row
         # this will make part of some pieces appear out of bounds, but this is common in modern tetris games
+        # TODO spawn 1 heigher and instantly move down 1
         self.active_piece.center = CENTER_SPAWN
 
         # Place tiles relative to the center
@@ -250,12 +249,32 @@ class MyGame(arcade.Window):
         if len(self.bag) == self.settings.preview_count:
             self.new_bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
             random.shuffle(self.new_bag)
-            self.bag.append(self.new_bag)
+            self.bag.extend(self.new_bag)
 
+    # Places the active piece at the position of the ghost piece
     def place_piece(self):
-        pass
+        for tile in self.ghost_tiles:
+            self.grid[tile[0]][tile[1]] = self.active_piece.type
 
-    def rotate_active(self, steps: int):
+        # Checks for full rows from a set of each unique height of the placed piece
+        self.clear_rows(set([self.ghost_tiles[i][1] for i in range(4)]))
+
+        self.spawn_piece(False)
+        self.hold_ready = True
+
+
+    # Checks if rows can be cleared
+    def clear_rows(self, rows: set[int]):
+        print(f"rows = {rows}")
+        for i in rows:
+            for j in range(GRID_WIDTH):
+                if not self.grid[j][i]:
+                    break
+
+            else:
+                self.grid.pop
+
+    def rotate_active(self, steps: int) -> bool:
         # Stores the position of the piece after being rotated
         rotated_piece = copy.deepcopy(self.active_piece)
         # Stores the new position
@@ -285,38 +304,46 @@ class MyGame(arcade.Window):
                                    offset[0], rotated_piece.center[1] + offset[1]]
 
             # Check if the new tile positions are occupied
-            for check in range(4):
-                try:
-                    if self.grid[new_position.tiles[check][0]][new_position.tiles[check][1]]:
-                        break
-                # List index out of range (Out of bounds)
-                except:
-                    break
-            else:
-                # If all tiles are in free positions, update the active piece; if this block is not executed, the rotation fails
+            if self.is_valid_pos(new_position.tiles):
                 self.active_piece = new_position
-                break
+                return True
+
+        return False
+
+    # Translates the active piece by the given value, returns false if it fails
+    def move_active(self, x, y) -> bool:
+        new_pos = [[], [], [], []]
+        for i, tile in enumerate(self.active_piece.tiles):
+            new_pos[i] = [tile[j] + [x, y][j] for j in range(2)]
+
+        if self.is_valid_pos(new_pos):
+            self.active_piece.tiles = new_pos
+            self.active_piece.center = [self.active_piece.center[i] + [x, y][i] for i in range(2)]
+            return True
+
+        return False
+
+    # Checks if an array of tiles overlaps any placed tiles or is out of bounds
+    def is_valid_pos(self, tiles: list[list[int]]) -> bool:
+        for tile in tiles:
+            # print(tile[0], tile[1])
+            if not (0 <= tile[0] < GRID_WIDTH and 0 <= tile[1] < GRID_HEIGHT):
+                return False
+            elif self.grid[tile[0]][tile[1]]:
+                return False
+        return True
 
     # Updates the current position of the ghost tiles
-    # TODO Chnange to a generic function that returns the position of ghost/placed tile
     def update_ghost(self):
+        new_ghost = copy.deepcopy(self.active_piece.tiles)
+        for i in range(GRID_HEIGHT):
+            if not self.is_valid_pos(new_ghost):
+                return
+            self.ghost_tiles = copy.deepcopy(new_ghost)
 
-        self.ghost_tiles = self.active_piece.tiles
-        for i in range(1, GRID_HEIGHT):
-            ghost_candidate = list(
-                # checks if there are any placed tiles immediately below tiles in ghost_candidate
-                map(lambda a: [a[0], a[1] - 1], self.ghost_tiles))
-            for tile in ghost_candidate:
-                try:
-                    if self.grid[tile[0]][tile[1]]:
-                        break
-                # List index out of range (out of bounds)
-                except:
-                    break
-            else:
-                self.ghost_tiles = ghost_candidate
-                continue
-            break
+            for j, tile in enumerate(new_ghost):
+                new_ghost[j] = [tile[k] - [0, 1][k] for k in range(2)]
+
 
 
 def main():
@@ -324,10 +351,6 @@ def main():
     window = MyGame()
     window.setup()
     arcade.run()
-
-
-def sort_coordinates(e):
-    return e[1]
 
 
 if __name__ == "__main__":

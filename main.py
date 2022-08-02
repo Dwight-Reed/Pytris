@@ -1,5 +1,3 @@
-from statistics import StatisticsError
-from turtle import clear
 import arcade
 import copy
 from dataclasses import dataclass

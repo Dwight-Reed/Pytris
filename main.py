@@ -1,8 +1,6 @@
-import copy
-from tkinter import Grid
-from types import new_class
 import arcade
-from dataclasses import dataclass, replace
+import copy
+from dataclasses import dataclass
 import pyglet
 import random
 
@@ -21,7 +19,7 @@ MARGIN = 5
 # Effective tile size, the amount of space a tile takes up including its margins (useful for calculating the space the board takes up)
 EFF_TILE_SIZE = TILE_SIZE + MARGIN
 # The location the center of a new piece spawns at
-CENTER_SPAWN = [4, 20]
+CENTER_SPAWN = [4, 21]
 
 # GRID_BORDER_X = [round(SCREEN_WIDTH / 2 - TILE_SIZE * GRID_WIDTH / 2), round(SCREEN_WIDTH / 2 + TILE_SIZE * GRID_WIDTH / 2)]
 
@@ -55,6 +53,14 @@ offsets.update(dict.fromkeys(['J', 'L', 'S', 'T', 'Z'], [
     [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
     [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]]
 ]))
+
+flip_offsets = [
+    [[0, 0], [0, 0]], # 0
+    [[0, 0], [0, 0]], # 1
+    [[0, 0], [0, -1]], # 2
+    [[0, 0], [0, -1]]  # 3
+]
+
 
 # Defines the shape and spawn positions relative to the center of the piece
 spawn_positions = {
@@ -103,11 +109,16 @@ class active_piece:
     center: list[int]
     tiles: list[list[int]]
     rotation: int
+    lowest_line: int
+    lock_counter: int
 
 
 class MyGame(arcade.Window):
     # Load default settings
     def __init__(self):
+        self.fall_interval = 1
+        self.cur_time = 0
+
         self.settings = settings
 
         # Call the parent class and set up the window
@@ -116,61 +127,72 @@ class MyGame(arcade.Window):
         # Create a grid of strings that represent the piece that was placed (for determining the color), empty strings represent an empty tile
         # This grid is only used to track placed tiles
         self.grid = []
-        for column in range(GRID_WIDTH):
+        for row in range(GRID_HEIGHT):
             self.grid.append([])
-            for row in range(GRID_HEIGHT):
-                self.grid[column].append('')
+            for column in range(GRID_WIDTH):
+                self.grid[row].append('')
 
         # Set the window's background color
         self.background_color = (self.settings.background_color)
 
         # Create a spritelist for batch drawing all the grid sprites
         self.grid_sprite_list = arcade.SpriteList()
+        self.grid_sprites = []
 
         # Create a list of solid-color sprites to represent each grid location
-        for column in range(GRID_WIDTH):
-            for row in range(RENDERED_GRID_HEIGHT):
-                x = column * (TILE_SIZE + MARGIN) + \
-                    (TILE_SIZE / 2 + MARGIN) + PADDING_X
-                y = row * (TILE_SIZE + MARGIN) + \
-                    (TILE_SIZE / 2 + MARGIN) + PADDING_Y
+        # for row in range(RENDERED_GRID_HEIGHT):
+        #     for column in range(GRID_WIDTH):
+        #         x = column * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_X
+        #         y = row * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_Y
+        #         sprite = arcade.SpriteSolidColor(
+        #             TILE_SIZE, TILE_SIZE, self.settings.colors[''])
+        #         sprite.center_x = x
+        #         sprite.center_y = y
+        #         self.grid_sprite_list.append(sprite)
+
+        for row in range(RENDERED_GRID_HEIGHT):
+            self.grid_sprites.append([])
+            for column in range(GRID_WIDTH):
+                x = column * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_X
+                y = row * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_Y
                 sprite = arcade.SpriteSolidColor(
                     TILE_SIZE, TILE_SIZE, self.settings.colors[''])
                 sprite.center_x = x
                 sprite.center_y = y
                 self.grid_sprite_list.append(sprite)
+                self.grid_sprites[row].append(sprite)
 
         self.ghost_tiles = [[], [], [], []]
 
     # Updates sprite grid to match positions of tiles
 
     def redraw_grid(self):
-        for i in range(GRID_WIDTH):
-            self.grid[i][0] = 'T'
 
         # Adds the placed pieces to the sprite grid (and clears anything else)
-        for row in range(RENDERED_GRID_HEIGHT):
-            for column in range(GRID_WIDTH):
-                self.grid_sprite_list[column * RENDERED_GRID_HEIGHT +
-                                      row].color = self.settings.colors[self.grid[column][row]] + (self.settings.normal_opacity,)
+        for column in range(GRID_WIDTH):
+            for row in range(RENDERED_GRID_HEIGHT):
+                self.grid_sprites[row][column].color = self.settings.colors[self.grid[row][column]] + (self.settings.normal_opacity,)
 
         # Draws the ghost tiles
         for tile in self.ghost_tiles:
             if not tile[1] >= RENDERED_GRID_HEIGHT:
                 # print(f"ghost tile = {tile}")
-                self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
-                                      ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+                self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+                # self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
+                #                       ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
 
         # Draws the active piece (overwrites ghost tiles if overlapping)
         for tile in self.active_piece.tiles:
             if not tile[1] >= RENDERED_GRID_HEIGHT:
                 # print(f"active tile = {tile}")
-                self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
-                                      ].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
+                self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
 
         # Change opacity of active_piece.center for debugging
-        self.grid_sprite_list[(self.active_piece.center[0] * (RENDERED_GRID_HEIGHT)) + self.active_piece.center[1]
-                              ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+        try:
+            self.grid_sprites[self.active_piece.center[1]][self.active_piece.center[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+        # Center is above grid
+        except:
+            pass
 
     def setup(self):
         # Generate the first bag
@@ -180,8 +202,10 @@ class MyGame(arcade.Window):
         # Determines if the player can swap the active piece with their hold
         self.hold_ready = True
         self.active_piece = active_piece(
-            '', [0, 0], [[0, 0], [0, 0], [0, 0], [0, 0]], 0)
+            '', [0, 0], [[0, 0], [0, 0], [0, 0], [0, 0]], 0, 0, 0)
         self.spawn_piece(False)
+        self.fall_interval = 1000
+        self.cur_time = 0
 
     def on_key_press(self, symbol, modifiers):
         cfg = self.settings
@@ -195,9 +219,8 @@ class MyGame(arcade.Window):
         elif symbol == cfg.move_down:
             self.move_active(0, -1)
 
-        elif symbol == cfg.hold:
-            if self.hold_ready:
-                self.spawn_piece(True)
+        elif symbol == cfg.hold and self.hold_ready:
+            self.spawn_piece(True)
 
         elif symbol == cfg.rotate_clockwise:
             self.rotate_active(1)
@@ -212,18 +235,27 @@ class MyGame(arcade.Window):
             self.place_piece()
 
     def on_draw(self):
-        # Clears the grid
         self.clear()
 
         # Update the sprite list
         self.redraw_grid()
 
         # Batch draw all the sprites
-
         self.grid_sprite_list.draw()
 
-    def on_update(self, dt):
+    def on_update(self, delta_time):
+        self.cur_time += delta_time
         self.update_ghost()
+        self.falling_piece(False)
+
+    def falling_piece(self, from_spawn: bool):
+        if from_spawn:
+            print("test")
+            self.move_active(0, -1)
+            self.fall_timer = self.cur_time
+        elif self.fall_timer - self.cur_time + self.fall_interval < 0:
+            self.move_active(0, -1)
+            self.fall_timer = self.cur_time
 
     def spawn_piece(self, from_hold: bool):
         print(self.bag)
@@ -236,7 +268,6 @@ class MyGame(arcade.Window):
 
         # Sets the center to be on the top row
         # this will make part of some pieces appear out of bounds, but this is common in modern tetris games
-        # TODO spawn 1 heigher and instantly move down 1
         self.active_piece.center = CENTER_SPAWN
 
         # Place tiles relative to the center
@@ -251,10 +282,12 @@ class MyGame(arcade.Window):
             random.shuffle(self.new_bag)
             self.bag.extend(self.new_bag)
 
+        self.falling_piece(True)
+
     # Places the active piece at the position of the ghost piece
     def place_piece(self):
         for tile in self.ghost_tiles:
-            self.grid[tile[0]][tile[1]] = self.active_piece.type
+            self.grid[tile[1]][tile[0]] = self.active_piece.type
 
         # Checks for full rows from a set of each unique height of the placed piece
         self.clear_rows(set([self.ghost_tiles[i][1] for i in range(4)]))
@@ -265,14 +298,24 @@ class MyGame(arcade.Window):
 
     # Checks if rows can be cleared
     def clear_rows(self, rows: set[int]):
-        print(f"rows = {rows}")
+        clears = []
+        # If a row has a value in each position, add it to the clears array
         for i in rows:
             for j in range(GRID_WIDTH):
-                if not self.grid[j][i]:
+                if not self.grid[i][j]:
                     break
-
             else:
-                self.grid.pop
+                clears.append(i)
+
+        # Remove rows starting from the highest to prevent row numbers being offset
+        clears.sort()
+        for row in reversed(clears):
+            self.grid.pop(row)
+            # Add a new row at the top to replace the old row (This avoids moving every tile down)
+            self.grid.append([])
+            for j in range(GRID_WIDTH):
+                self.grid[-1].append('')
+
 
     def rotate_active(self, steps: int) -> bool:
         # Stores the position of the piece after being rotated
@@ -293,8 +336,11 @@ class MyGame(arcade.Window):
         # Run the 5 tests
         for test in range(5):
             # Calculate the offset for the current test according to the offset data
-            offset = [offset_data[self.active_piece.rotation][test][i] -
-                      offset_data[new_position.rotation][test][i] for i in range(2)]
+            if steps == 2:
+                offset = [flip_offsets[self.active_piece.rotation][test][i] - flip_offsets[new_position.rotation][test][i] for i in range(2)]
+            else:
+                offset = [offset_data[self.active_piece.rotation][test][i] -
+                        offset_data[new_position.rotation][test][i] for i in range(2)]
 
             # Set the tile positions according to the offset
             for i in range(4):
@@ -305,7 +351,7 @@ class MyGame(arcade.Window):
 
             # Check if the new tile positions are occupied
             if self.is_valid_pos(new_position.tiles):
-                self.active_piece = new_position
+                self.active_piece = copy.deepcopy(new_position)
                 return True
 
         return False
@@ -329,7 +375,7 @@ class MyGame(arcade.Window):
             # print(tile[0], tile[1])
             if not (0 <= tile[0] < GRID_WIDTH and 0 <= tile[1] < GRID_HEIGHT):
                 return False
-            elif self.grid[tile[0]][tile[1]]:
+            elif self.grid[tile[1]][tile[0]]:
                 return False
         return True
 

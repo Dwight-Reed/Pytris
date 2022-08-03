@@ -1,34 +1,36 @@
+from lib2to3.pgen2.tokenize import StopTokenizing
 import arcade
 import copy
 from dataclasses import dataclass
 from enum import Enum
+from math import ceil
 import pyglet
 import random
+from screeninfo import get_monitors
 # Constants
-SCREEN_WIDTH = 600
-SCREEN_HEIGHT = 1000
-SCREEN_TITLE = "Tetris"
+DEFAULT_SCREEN_DIMS = [840, 1000]
+SCREEN_TITLE = 'Pytris'
 
 # Length of each side of a tile
-TILE_SIZE = 40
-# Size of the grid in tiles, the actual grid is 1 taller than the visible grid
-GRID_WIDTH = 10
-GRID_HEIGHT = 22
-RENDERED_GRID_HEIGHT = GRID_HEIGHT - 1
+# Size of the grid in tiles, the actual grid taller than the visible grid, this allows for manipulating pieces that are partially above the 'skyline'
+GRID_DIMS = [10, 26]
 
-# The Size of the grid lines
-MARGIN = 5
+RENDERED_GRID_HEIGHT = GRID_DIMS[1] - 6
 
-# Effective tile size, the amount of space a tile takes up including its margins (useful for calculating the space the board takes up)
-EFF_TILE_SIZE = TILE_SIZE + MARGIN
-
-# The location the center of a new piece spawns at
+# The location the center of a new piece spawns at (spawned pieces immediately move down if possible, so only part of it appears to spawn outside the grid)
 CENTER_SPAWN = [4, 20]
 
-# Area on each side of the grid to be left blank (centers the grid)
-PADDING_X = (SCREEN_WIDTH - (TILE_SIZE + MARGIN) * GRID_WIDTH) / 2
-PADDING_Y = (SCREEN_HEIGHT - (TILE_SIZE + MARGIN) * GRID_HEIGHT) / 2
+# The position of a tile's center when displayed on the preview or hold grid
+INFO_CENTER_SPAWN = [1, 0]
 
+# Number of pieces to be shown in the preview grid
+PREVIEW_COUNT = 5
+
+# Dimensions of the preview and hold grids
+INFO_GRID_DIMS = [4, 2]
+
+# Scales the preview size based on the dimension that restricts space more, each preview is a 4x2 grid
+PREVIEW_GRID_DIMS = [4, 2 * PREVIEW_COUNT]
 # Time before a piece is automatically locked when it is unable to fall
 LOCK_DELAY = 0.5
 
@@ -62,7 +64,7 @@ offsets.update(dict.fromkeys(['J', 'L', 'S', 'T', 'Z'], [
 ]))
 
 # Defines the shape and spawn positions relative to the center of the piece
-spawn_positions = {
+SPAWN_POSITIONS = {
     'I': [[-1, 0], [0, 0], [1, 0], [2, 0]],
     'J': [[-1, 1], [-1, 0], [0, 0], [1, 0]],
     'L': [[1, 1], [-1, 0], [0, 0], [1, 0]],
@@ -74,16 +76,16 @@ spawn_positions = {
 
 
 # Amount of points awarded for various moves
-score_data = {
-    "normal_clear": [100, 300, 500, 800],
-    "mini_t_spin": [100, 200],
-    "t_spin": [400, 800, 1200, 1600],
+SCORE_DATA = {
+    'normal_clear': [100, 300, 500, 800],
+    'mini_t_spin': [100, 200],
+    't_spin': [400, 800, 1200, 1600],
     # Multipliers
-    "back_to_back_mp": 0.5,
-    "soft_drop_mp": 1,
-    "hard_drop_mp": 2
+    'back_to_back_mp': 0.5,
+    'soft_drop_mp': 1,
+    'hard_drop_mp': 2
 }
-
+# TODO: make defaults compliant with guideline, add control customization
 @dataclass
 class Settings:
     # Keybinds
@@ -98,23 +100,27 @@ class Settings:
     rotate_flip = pyglet.window.key.W
 
     # Other Settings
-    preview_count = 2
     colors = {
-        '': (150, 150, 150),
+        # Empty Tile
+        '': (0, 0, 0),
+        # Pieces
         'I': (0, 255, 255),
         'J': (0, 0, 255),
         'L': (255, 170, 0),
         'O': (255, 255, 0),
         'S': (0, 255, 0),
         'T': (153, 0, 255),
-        'Z': (255, 0, 0)
+        'Z': (255, 0, 0),
+        # Other
+        'background': (0, 0, 0),
+        'grid_line': (127, 127, 127)
     }
     normal_opacity = 255
     ghost_opacity = 128
-    background_color = (0, 0, 0)
+
 
     # The time a left or right key must be held down before it moves additional tiles
-    delayed_auto_shift = 0.08
+    delayed_auto_shift = 0.1
 
     # The time between each movement while holding down a horizontal movement key
     auto_repeat_rate = 0.005
@@ -131,6 +137,8 @@ class ActivePiece:
     rotation: int
     lowest_line: int
     lock_counter: int
+    rotation_point: int
+    soft_drop_count: int
 
 # Stores data for the ghost piece
 @dataclass
@@ -143,71 +151,75 @@ class GamePhase(Enum):
     GENERATION = 0
     FALLING = 1
     LOCK = 2
-    PATTERN = 3
-    ITERATE = 4
-    ELIMINATE = 5
-    COMPLETION = 6
+    ITERATE = 3
+    ELIMINATE = 4
+    COMPLETION = 5
 
 @dataclass
-class Statistics:
+class game_statistics:
+    # Total Score
     score: int
-    clear: list[int]
-    mini_t_spin: list[int]
+    # Number of times i - 1 rows were cleared (i = index of list)
+    clears: list[int]
+    # Number of times a normal t-spin cleared i rows
     t_spin: list[int]
+    # Number of times a mini t-spin cleared i rows
+    mini_t_spin: list[int]
+
+# Stores info for scaling, see on_resize()
+@dataclass
+class WindowScale:
+    size = list[int]
+    tile_size = int
+    eff_tile_size = int
+    grid_line_width = int
+    grid_pos = list[int]
+    preview_pos = list[int]
+    hold_pos = list[int]
+    info_offset = int
+    font_size = int
+    text_height = int
 
 class MyGame(arcade.Window):
     # Load default settings
     def __init__(self):
+        for m in get_monitors():
+            print(str(m))
 
+        # Call the parent class and set up the window
+        super().__init__(DEFAULT_SCREEN_DIMS[0], DEFAULT_SCREEN_DIMS[1], SCREEN_TITLE, resizable=True)
+        self.scale = WindowScale
         self.fall_interval = 1
         self.cur_time = 0
 
         self.settings = Settings
-
-        # Call the parent class and set up the window
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
-
-        # Create a grid of strings that represent the piece that was placed (for determining the color), empty strings represent an empty tile
-        # This grid is only used to track placed tiles, active piece and ghost are separate
-        self.grid = []
-        for row in range(GRID_HEIGHT):
-            self.grid.append([])
-            for column in range(GRID_WIDTH):
-                self.grid[row].append('')
-
-        # Set the window's background color
-        self.background_color = (self.settings.background_color)
-
-        # Create a sprite list for batch drawing all the grid sprites
+        # Create the main grid
+        self.grid = self.create_grid(GRID_DIMS, '')
         self.grid_sprite_list = arcade.SpriteList()
         self.grid_sprites = []
 
-        # Create a list of solid-color sprites to represent each grid location
-        for row in range(RENDERED_GRID_HEIGHT):
-            self.grid_sprites.append([])
-            for column in range(GRID_WIDTH):
-                x = column * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_X
-                y = row * (TILE_SIZE + MARGIN) + (TILE_SIZE / 2 + MARGIN) + PADDING_Y
-                sprite = arcade.SpriteSolidColor(
-                    TILE_SIZE, TILE_SIZE, self.settings.colors[''])
-                sprite.center_x = x
-                sprite.center_y = y
-                self.grid_sprite_list.append(sprite)
-                self.grid_sprites[row].append(sprite)
+        # Create the preview grid
+        self.preview_grid = self.create_grid(PREVIEW_GRID_DIMS, 'background')
+        self.preview_grid_sprite_list = arcade.SpriteList()
+        self.preview_grid_sprites = []
 
+        # Create the hold grid
+        self.hold_grid = self.create_grid(INFO_GRID_DIMS, 'background')
+        self.hold_grid_sprite_list = arcade.SpriteList()
+        self.hold_grid_sprites = []
         # Create object to store ghost tiles (indicates where a piece will be dropped on a hard drop)
         self.ghost = GhostPiece([[0, 0], [0, 0], [0, 0], [0, 0]], [0, 0])
 
         # Initialize timers
         self.timers = {
             # Time until the active piece will move down automatically
-            "fall": 0.0,
+            'fall': 0.0,
             # Time until the active piece will move down while the down key is pressed
-            "drop_ARR": 0.0,
+            'drop_ARR': 0.0,
             # Auto Repeat Rate
-            "ARR": 0.0,
+            'ARR': 0.0,
             # Delayed Auto Shift
-            "DAS": 0.0
+            'DAS': 0.0
         }
         self.game_phase = GamePhase
         self.fall_while_locking = False
@@ -215,14 +227,83 @@ class MyGame(arcade.Window):
         # Sets up handler for pressed keys
         self.keys = pyglet.window.key.KeyStateHandler()
         self.push_handlers(self.keys)
+        self.stats = game_statistics(0, [0, 0, 0], [0, 0, 0, 0], [0, 0])
+        # self.lines = []
 
+    def create_grid(self, size: list[int], default_value) -> list[list[int]]:
+        # Create a grid of strings that represent the piece that was placed (for determining the color), empty strings represent an empty tile
+        grid = []
+        for row in range(size[1]):
+            grid.append([])
+            for column in range(size[0]):
+                grid[row].append(default_value)
+        return grid
 
+    def create_sprite_grid(self, size: list[int], visible_size: list[int], tile_size: int, line_width: int, position: list[int], sprite_list, sprite_list_2d):
+        # Create a sprite list for batch drawing all the grid sprites
+        sprite_list.clear()
+        sprite_list_2d.clear()
+
+        # Create a list of solid-color sprites to represent each grid location
+        for row in range(visible_size[1]):
+            sprite_list_2d.append([])
+            for column in range(visible_size[0]):
+                x = column * (tile_size + line_width) + (tile_size / 2 + line_width) + position[0]
+                y = row * (tile_size + line_width) + (tile_size / 2 + line_width) + position[1]
+                sprite = arcade.SpriteSolidColor(
+                    tile_size, tile_size, (255, 255, 255))
+                sprite.center_x = x
+                sprite.center_y = y
+                sprite_list.append(sprite)
+                sprite_list_2d[row].append(sprite)
+            # print(f"({position[0]}, {position[1] * row}), ({position[0] + (tile_size + line_width) * size[1]}, {position[1] * row}), {self.settings.colors['grid_line']}, {line_width}")
+            # self.test = [position[0], position[1] * row, position[0] + (tile_size + line_width) * size[1], position[1] * row, self.settings.colors['grid_line'], line_width]
+            # self.lines.append([position[0], position[1] + row * (tile_size + line_width),
+            #     position[0] + (tile_size + line_width) * size[0], position[1] + row * (tile_size + line_width)])
+
+    # Adjusts scaling when the window's size changes, this is automatically called once after __init__()
+    def on_resize(self, width, height):
+        super().on_resize(width, height)
+        # The size of the window
+        print(width, height)
+        self.scale.size = [width, height]
+
+        # Length of each side of a tile
+        self.scale.tile_size = self.scale.size[1] // 23
+
+        # The width of the grid lines
+        self.scale.grid_line_width = ceil(self.scale.size[1] / 800)
+
+        # Effective tile size, the amount of space a tile takes up including its margins
+        self.scale.eff_tile_size = self.scale.tile_size + self.scale.grid_line_width
+        print(self.scale.eff_tile_size * 18)
+        # Position of the three grids, main grid is centered
+        self.scale.grid_pos = [(self.scale.size[0] - self.scale.eff_tile_size * GRID_DIMS[0]) / 2,
+            (self.scale.size[1] - self.scale.eff_tile_size * RENDERED_GRID_HEIGHT) / 2]
+
+        # How far preview and hold should be from the main grid
+        self.scale.info_offset = self.scale.size[1] / 200
+
+        self.scale.preview_pos = [self.scale.size[0] - self.scale.grid_pos[0] + self.scale.info_offset,
+            self.scale.size[1] - self.scale.grid_pos[1] - self.scale.eff_tile_size * INFO_GRID_DIMS[1] * PREVIEW_COUNT]
+
+        self.scale.hold_pos = [self.scale.grid_pos[0] - self.scale.eff_tile_size * INFO_GRID_DIMS[0] - self.scale.info_offset,
+            self.scale.size[1] - self.scale.grid_pos[1] - self.scale.eff_tile_size * INFO_GRID_DIMS[1]]
+        # self.lines = []
+        # Create new sprite grids with new parameters
+        self.create_sprite_grid(GRID_DIMS, [GRID_DIMS[0], RENDERED_GRID_HEIGHT], self.scale.tile_size, self.scale.grid_line_width, self.scale.grid_pos, self.grid_sprite_list, self.grid_sprites)
+        self.create_sprite_grid(PREVIEW_GRID_DIMS, PREVIEW_GRID_DIMS, self.scale.tile_size, self.scale.grid_line_width, self.scale.preview_pos, self.preview_grid_sprite_list, self.preview_grid_sprites)
+        self.create_sprite_grid(INFO_GRID_DIMS,INFO_GRID_DIMS, self.scale.tile_size, self.scale.grid_line_width, self.scale.hold_pos, self.hold_grid_sprite_list, self.hold_grid_sprites)
+
+        # Text size
+        self.scale.text_height = self.scale.size[1] / 50
+        self.scale.font_size = self.scale.size[1] / 50
     # Updates sprite grid to match positions of tiles
     # TODO: don't only redraw modified tiles
     def redraw_grid(self):
 
         # Adds the placed pieces to the sprite grid (and clears anything else)
-        for column in range(GRID_WIDTH):
+        for column in range(GRID_DIMS[0]):
             for row in range(RENDERED_GRID_HEIGHT):
                 self.grid_sprites[row][column].color = self.settings.colors[self.grid[row][column]] + (self.settings.normal_opacity,)
 
@@ -239,11 +320,21 @@ class MyGame(arcade.Window):
                 self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
 
         # Change opacity of ActivePiece.center for debugging
-        try:
-            self.grid_sprites[self.active_piece.center[1]][self.active_piece.center[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
-        # Center is above grid
-        except:
-            pass
+        # try:
+        #     self.grid_sprites[self.active_piece.center[1]][self.active_piece.center[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+        # # Center is above grid
+        # except:
+        #     pass
+
+        # Draw preview grid
+        for column in range(PREVIEW_GRID_DIMS[0]):
+            for row in range(PREVIEW_GRID_DIMS[1]):
+                self.preview_grid_sprites[row][column].color = self.settings.colors[self.preview_grid[row][column]] + (self.settings.normal_opacity,)
+
+        # Draw hold grid
+        for column in range(INFO_GRID_DIMS[0]):
+            for row in range(INFO_GRID_DIMS[1]):
+                self.hold_grid_sprites[row][column].color = self.settings.colors[self.hold_grid[row][column]] + (self.settings.normal_opacity,)
 
     def setup(self):
         self.game_phase = GamePhase.GENERATION
@@ -254,32 +345,38 @@ class MyGame(arcade.Window):
         # Determines if the player can swap the active piece with their hold
         self.hold_ready = True
         self.active_piece = ActivePiece(
-            '', [0, 0], [[0, 0], [0, 0], [0, 0], [0, 0]], 0, GRID_HEIGHT, 0)
+            '', [0, 0], [[0, 0], [0, 0], [0, 0], [0, 0]], 0, GRID_DIMS[1], 0, -1, 0)
         self.spawn_piece(False)
         self.fall_interval = 1
         self.cur_time = 0
         self.hold = ''
+        self.back_to_back_bonus = False
+
+        # Update preview for first bag
+        for i, type in enumerate(reversed(self.bag[:PREVIEW_COUNT])):
+            for tile in SPAWN_POSITIONS[type]:
+                self.preview_grid[(INFO_CENTER_SPAWN[1] + (i)) * 2 + tile[1]][INFO_CENTER_SPAWN[0] + tile[0]] = type
 
     def on_key_press(self, symbol, modifiers):
         cfg = self.settings
         if symbol == cfg.move_left:
             self.move_active(-1, 0)
             self.reset_lock_timer()
-            self.timers["DAS"] = self.settings.delayed_auto_shift
-            # Stores the most recent move_left or move_right key press  (determines which direction the piece should move if both are pressed)
+            self.timers['DAS'] = self.settings.delayed_auto_shift
+            # Stores the most recent move_left or move_right key press (determines which direction the piece should move if both are pressed)
             # Value is the direction the block would move in
             self.last_horizontal_key = -1
 
         elif symbol == cfg.move_right:
             self.move_active(1, 0)
             self.reset_lock_timer()
-            self.timers["DAS"] = self.settings.delayed_auto_shift
+            self.timers['DAS'] = self.settings.delayed_auto_shift
             self.last_horizontal_key = 1
 
         # elif symbol == cfg.move_down:
         #     if self.move_active(0, -1):
         #         # Reset the fall timer when the player manually moves the piece, this make it easier to manipulate
-        #         self.timers["fall"] = self.fall_interval
+        #         self.timers['fall'] = self.fall_interval
 
         elif symbol == cfg.hold and self.hold_ready:
             self.spawn_piece(True)
@@ -302,6 +399,7 @@ class MyGame(arcade.Window):
 
             if not (self.rotate_active(1) and self.rotate_active(1)):
                 self.active_piece = copy.deepcopy(tmp_piece)
+
             else:
                 self.check_lowest_pos()
 
@@ -316,23 +414,27 @@ class MyGame(arcade.Window):
         if self.keys[self.settings.move_down]:
             # If drop_ARR is 0, move the active piece down until it hits an object
             if self.settings.drop_auto_repeat_rate == 0:
-                for i in range(GRID_HEIGHT):
-                    if not self.move_active(0, -1):
+                for i in range(GRID_DIMS[1]):
+                    if self.move_active(0, -1):
+                        if self.game_phase == GamePhase.FALLING:
+                            self.active_piece.soft_drop_count += 1
+                    else:
                         break
-            elif self.timers["drop_ARR"] <= 0:
-                self.move_active(0, -1)
-                # Reset the fall timer when the piece is manually moved down, this make it easier to manipulate
-                self.timers["fall"] = self.fall_interval
+            elif self.timers['drop_ARR'] <= 0:
+                if self.move_active(0, -1) and self.game_phase == GamePhase.FALLING:
+                    self.active_piece.soft_drop_count += 1
+                # Reset the fall timer when the piece is manually moved down, this make it more predictable
+                self.timers['fall'] = self.fall_interval
 
         # DAS and ARR
-        if self.timers["DAS"] <= 0:
+        if self.timers['DAS'] <= 0:
             # If ARR is 0, move the active piece in the corresponding direction until it hits an object
             if self.settings.auto_repeat_rate == 0:
                 while True:
                     if not self.move_active(self.last_horizontal_key, 0):
                         self.update_ghost()
                         break
-            elif self.timers["ARR"] <= 0:
+            elif self.timers['ARR'] <= 0:
                 # If both horizontal movement keys are held down, use self.last_horizontal_key to determine direction
                 if self.keys[self.settings.move_left] and self.keys[self.settings.move_right]:
                     self.move_active(self.last_horizontal_key, 0)
@@ -344,7 +446,7 @@ class MyGame(arcade.Window):
                     self.move_active(1, 0)
                 else:
                     return
-                self.timers["ARR"] = self.settings.auto_repeat_rate
+                self.timers['ARR'] = self.settings.auto_repeat_rate
                 self.update_ghost()
 
 
@@ -358,7 +460,7 @@ class MyGame(arcade.Window):
 
         # Execute appropriate functions for the current game phase
         if self.game_phase == GamePhase.FALLING:
-            self.falling_piece()
+            self.falling()
 
         elif self.game_phase == GamePhase.LOCK:
             self.locking()
@@ -366,16 +468,21 @@ class MyGame(arcade.Window):
         self.held_keys()
     # Generation Phase
     def spawn_piece(self, from_hold: bool):
+        # Used for scoring T-Spins
+        self.active_piece.soft_drop_count = 0
+        self.active_piece.rotation_point = -1
         if from_hold:
             # If hold is empty (first use of the current game), get a new piece from the bag instead of the hold
             if self.hold == '':
                 self.hold = self.active_piece.type
                 self.active_piece.type = self.bag.pop(0)
+                self.update_preview()
+                # Draw hold grid
 
             # Swap active piece and hold
             else:
                 self.active_piece.type, self.hold = self.hold, self.active_piece.type
-
+            self.update_hold()
         else:
             # Remove first type from the bag and set the new piece to that type
             self.active_piece.type = self.bag.pop(0)
@@ -385,17 +492,17 @@ class MyGame(arcade.Window):
         self.active_piece.rotation = 0
 
         # Place tiles relative to the center
-        for i, tile in enumerate(spawn_positions[self.active_piece.type]):
+        for i, tile in enumerate(SPAWN_POSITIONS[self.active_piece.type]):
             self.active_piece.tiles[i] = [
                 CENTER_SPAWN[j] + tile[j] for j in range(2)]
 
         # If the new piece does not have room to spawn, the game is over
         if not self.is_valid_pos(self.active_piece.tiles):
-            self.game_over("Block Out")
+            self.game_over('Block Out')
 
         # If the bag has fewer pieces than the preview is set to display, generate and append a new bag
         # Each bag has one of each tile, which ensures even distribution of pieces
-        if len(self.bag) == self.settings.preview_count:
+        if len(self.bag) == PREVIEW_COUNT:
             self.new_bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
             random.shuffle(self.new_bag)
             self.bag.extend(self.new_bag)
@@ -403,10 +510,10 @@ class MyGame(arcade.Window):
         # Piece spawns partially outside of the visible grid, but tries to move down immediately; the lock phase is not started until it fails to move down naturally,
         # this gives additional time equal to fall_interval to move instead of the usual 0.5 when a piece cannot fall
         self.move_active(0, -1)
-        self.timers["fall"] = self.fall_interval
+        self.timers['fall'] = self.fall_interval
 
         # Resets the lowest line to be used for tracking lock timer resets and switching from the lock to falling phase
-        self.active_piece.lowest_line = GRID_HEIGHT
+        self.active_piece.lowest_line = GRID_DIMS[1]
         self.check_lowest_pos()
 
         self.game_phase = GamePhase.FALLING
@@ -415,83 +522,72 @@ class MyGame(arcade.Window):
         self.update_ghost()
 
     # Falling Phase
-    def falling_piece(self):
+    def falling(self):
         # If the fall timer has expired, try to move the active piece
-        if self.timers["fall"] <= 0:
+        if self.timers['fall'] <= 0:
             # If the active piece cannot be moved, enter the locking phase
             if not self.move_active(0, -1):
                 self.game_phase = GamePhase.LOCK
-                self.timers["lock"] = LOCK_DELAY
+                self.timers['lock'] = LOCK_DELAY
 
             else:
                 # Reset the fall timer
-                self.timers["fall"] = self.fall_interval
+                self.timers['fall'] = self.fall_interval
 
     # Locking Phase
     def locking(self):
         # Pieces can fall during the locking phase if the lowest y position of any tile is greater than or equal to the lowest position any tile was previously (for the active piece)
         # If the piece falls below that threshold, check_lowest_pos() will switch back to the falling phase
         if self.fall_while_locking:
-            if self.timers["fall"] <= 0:
+            if self.timers['fall'] <= 0:
                 if not self.move_active(0, -1):
                     self.fall_while_locking = False
-                    self.timers["lock"] = LOCK_DELAY
+                    # Check but don't increment the lock counter
+                    if self.active_piece.lock_counter < MAX_LOCK_RESET:
+                        self.timers['lock'] = LOCK_DELAY
 
-            # else:
-                # Reset the fall timer
-                # self.timers["fall"] = self.fall_interval
+                self.timers['fall'] = self.fall_interval
+
         # If the active piece can move down, reset the fall timer and allow it to fall during the lock phase
         elif self.active_piece.tiles != self.ghost.tiles:
-            self.timers["fall"] = self.fall_interval
+            self.timers['fall'] = self.fall_interval
             self.fall_while_locking = True
 
         # If the lock timer has expired, place the active piece
         else:
-            if self.timers["lock"] <= 0:
+            if self.timers['lock'] <= 0:
                 self.place_piece()
 
     # Resets the lock timer and increments the lock counter if in the locking phase and the lock counter has not exceeded the max
     def reset_lock_timer(self):
         if self.game_phase == GamePhase.LOCK and self.active_piece.lock_counter < MAX_LOCK_RESET:
             self.active_piece.lock_counter += 1
-            self.timers["lock"] = LOCK_DELAY
+            self.timers['lock'] = LOCK_DELAY
 
     # Places the active piece at the position of the ghost piece
     def place_piece(self):
         # End the game if the placed tile is completely outside the visible grid
         for tile in self.ghost.tiles:
-            if tile[1] > GRID_HEIGHT - 2:
-                self.game_over("Lock Out")
+            if tile[1] > GRID_DIMS[1] - 2:
+                self.game_over('Lock Out')
 
         for tile in self.ghost.tiles:
             self.grid[tile[1]][tile[0]] = self.active_piece.type
 
-        # Pattern Phase
-        self.game_phase = GamePhase.PATTERN
-        self.pattern()
-
-        # Iterate Phase
+        # Pattern/Iterate/Eliminate Phase
         self.game_phase = GamePhase.ITERATE
         self.iterate(set([self.ghost.tiles[i][1] for i in range(4)]))
 
         self.spawn_piece(False)
         self.hold_ready = True
+        self.update_preview()
 
-    def pattern(self):
-        pass
-        # T-Spin
-        # for each
-        # filled_corners = 0
-        # for corner in [self.ghost.tiles.[[-1, 1], [1, 1], [-1, -1], [1, -1]]]:
-        #     if self.grid[corner[1]][corner[0]]:
-        #         filled_corners += 1
-
-    # Iterate Phase
+    # Pattern/Iterate Phase
     def iterate(self, rows: set[int]):
         clears = []
         # If a row has a value in each position, add it to the clears list
         for i in rows:
-            for j in range(GRID_WIDTH):
+            for j in range(GRID_DIMS[0]):
                 if not self.grid[i][j]:
                     break
             else:
@@ -504,9 +600,76 @@ class MyGame(arcade.Window):
             self.grid.pop(row)
             # Add a new row at the top to replace the old row (This avoids moving every tile down)
             self.grid.append([])
-            for j in range(GRID_WIDTH):
+            for j in range(GRID_DIMS[0]):
                 self.grid[-1].append('')
 
+        self.cleared_lines = len(clears)
+        # Calculate score
+        self.score()
+        self.stats.score = int(round(self.stats.score))
+        print(f"score: {self.stats.score}")
+
+    def score(self):
+        # Hard drop score
+        self.stats.score += (self.active_piece.center[1] - self.ghost.center[1]) * SCORE_DATA['hard_drop_mp']
+
+        # Soft drop score
+        self.stats.score += self.active_piece.soft_drop_count * SCORE_DATA['soft_drop_mp']
+
+        # Sets the effective multiplier for the back-to-back bonus
+        if self.back_to_back_bonus:
+            eff_back_to_back_mp = SCORE_DATA['back_to_back_mp']
+        else:
+            eff_back_to_back_mp = 1
+        # T-Spin
+        # the indices of corners[] correspond with if the tile in the diagram below is filled (relative to the placed T piece)
+        # 0#1
+        # ###
+        # 2#3
+        # If the active piece is a 'T', check for a T-Spin
+        if self.active_piece.type == 'T':
+            # Corners are arranged in the order A, B, D, C relative to the guideline
+            # Swapping C and D makes it easier to change based on rotation and there is no case where the core would be different
+            corners = [[-1, 1], [1, 1], [1, -1], [-1, -1]]
+            for i in range(self.active_piece.rotation):
+                corners.insert(0, corners.pop())
+
+            for i, corner in enumerate([[self.active_piece.center[i] + corners[j][i] for i in range(2)] for j in range(4)]):
+                try:
+                    corners[i] = bool(self.grid[corner[1]][corner[0]])
+                # Out of bounds (treated as an occupied tile for scoring)
+                except:
+                    corners[i] = True
+
+            # Normal T-Spin
+            # If corners A and B are occupied or the final rotation used rotation point 4 (guideline says rotation point 5, but this is 0-indexed)
+            if (corners[0] and corners[1] and (corners[2] or corners[3])) or self.active_piece.rotation_point == 4:
+                self.stats.score += SCORE_DATA['t_spin'][self.cleared_lines] * eff_back_to_back_mp
+
+                self.stats.t_spin[self.cleared_lines] += 1
+                # A T-Spin without any clears does not reset the back-to-back bonus, but does not start it either
+                if self.cleared_lines > 0:
+                    self.back_to_back_bonus = True
+                return
+
+            # Mini T-Spin
+            elif sum(corners) >= 3 and self.active_piece.rotation_point != -1:
+                self.stats.score += SCORE_DATA['t_spin'][self.cleared_lines]
+                self.stats.mini_t_spin[self.cleared_lines] += 1
+                if self.cleared_lines > 0:
+                    self.back_to_back_bonus = True
+                return
+
+        # Reset the back-to-back multiplier if the placement was not a tetris (i.e. 4 line clears)
+        if self.cleared_lines != 4:
+            eff_back_to_back_mp = 1
+        if self.cleared_lines > 0:
+            self.stats.score += SCORE_DATA['normal_clear'][self.cleared_lines - 1] * eff_back_to_back_mp
+
+        if self.cleared_lines == 4:
+            self.back_to_back_bonus = True
+        else:
+            self.back_to_back_bonus = False
 
     def on_draw(self):
         self.clear()
@@ -514,10 +677,42 @@ class MyGame(arcade.Window):
         # Update the sprite list
         self.redraw_grid()
 
-        # Batch draw all the sprites
-        self.grid_sprite_list.draw()
+        # Draw grid lines for the main grid (the grid itself will be drawn over)
+        arcade.draw_xywh_rectangle_filled(self.scale.grid_pos[0], self.scale.grid_pos[1],
+            GRID_DIMS[0] * self.scale.eff_tile_size + self.scale.grid_line_width, RENDERED_GRID_HEIGHT * self.scale.eff_tile_size + self.scale.grid_line_width,
+            self.settings.colors['grid_line'])
 
-        # win = pyglet.window.Window()
+        # Draw grids
+        self.grid_sprite_list.draw()
+        self.preview_grid_sprite_list.draw()
+        self.hold_grid_sprite_list.draw()
+
+        # Draw score
+        arcade.draw_text(f'Score: {self.stats.score}', self.scale.grid_pos[0] - 100, self.scale.hold_pos[1] - self.scale.text_height * 2, font_size=self.scale.font_size, width=100, align='center')
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        # print(x, y)
+        pass
+    # Update the preview grid
+    def update_preview(self):
+        type = self.bag[PREVIEW_COUNT - 1]
+        del self.preview_grid[PREVIEW_GRID_DIMS[1] - 2:PREVIEW_GRID_DIMS[1] - 1]
+        # For each tile in 1 section of the preview grid
+        for i in range(round(PREVIEW_GRID_DIMS[1] / PREVIEW_COUNT)):
+            self.preview_grid.insert(0, [])
+            for j in range(PREVIEW_GRID_DIMS[0]):
+                self.preview_grid[0].append('background')
+        for tile in SPAWN_POSITIONS[type]:
+            self.preview_grid[INFO_CENTER_SPAWN[1] + tile[1]][INFO_CENTER_SPAWN[0] + tile[0]] = type
+
+    # Update the hold grid
+    def update_hold(self):
+        for i in range(INFO_GRID_DIMS[1]):
+            for j in range(INFO_GRID_DIMS[0]):
+                self.hold_grid[i][j] = 'background'
+
+        for tile in SPAWN_POSITIONS[self.hold]:
+            self.hold_grid[INFO_CENTER_SPAWN[1] + tile[1]][INFO_CENTER_SPAWN[0] + tile[0]] = self.hold
 
     def rotate_active(self, steps: int) -> bool:
         # Stores the position of the piece after being rotated
@@ -553,6 +748,8 @@ class MyGame(arcade.Window):
             # Check if the new tile positions are occupied
             if self.is_valid_pos(new_position.tiles):
                 self.active_piece = copy.deepcopy(new_position)
+                # Used for scoring T-Spins
+                self.active_piece.rotation_point = test
                 return True
 
         return False
@@ -560,7 +757,6 @@ class MyGame(arcade.Window):
     # Translates the active piece by the given value, returns false if it fails
     # TODO use for rotation
     def move_active(self, x: int, y: int) -> bool:
-
         new_pos = [[], [], [], []]
         for i, tile in enumerate(self.active_piece.tiles):
             new_pos[i] = [tile[j] + [x, y][j] for j in range(2)]
@@ -569,6 +765,9 @@ class MyGame(arcade.Window):
             self.active_piece.tiles = new_pos
             self.active_piece.center = [self.active_piece.center[i] + [x, y][i] for i in range(2)]
             self.check_lowest_pos()
+            # Used for scoring
+            self.active_piece.rotation_point = -1
+
             return True
 
         return False
@@ -576,20 +775,19 @@ class MyGame(arcade.Window):
     # Checks if a list of tiles overlaps any placed tiles or is out of bounds
     def is_valid_pos(self, tiles: list[list[int]]) -> bool:
         for tile in tiles:
-            if not (0 <= tile[0] < GRID_WIDTH and 0 <= tile[1] < GRID_HEIGHT):
+            if not (0 <= tile[0] < GRID_DIMS[0] and 0 <= tile[1] < GRID_DIMS[1]):
                 return False
 
             elif self.grid[tile[1]][tile[0]]:
                 return False
 
         return True
-
     # Updates the current position of the ghost tiles
     def update_ghost(self):
         new_ghost = GhostPiece
         new_ghost.tiles = copy.deepcopy(self.active_piece.tiles)
         new_ghost.center =  copy.deepcopy(self.active_piece.center)
-        for i in range(GRID_HEIGHT):
+        for i in range(GRID_DIMS[1]):
             if not self.is_valid_pos(new_ghost.tiles):
                 return
             self.ghost.tiles = copy.deepcopy(new_ghost.tiles)
@@ -608,15 +806,15 @@ class MyGame(arcade.Window):
                 self.game_phase = GamePhase.FALLING
 
     def game_over(self, reason: str):
-        print(f"game over - {reason}")
+        print(f'game over - {reason}\nscore: {self.stats.score}')
         exit(0)
 
 def main():
-    """Main function"""
+    '''Main function'''
     window = MyGame()
     window.setup()
     arcade.run()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

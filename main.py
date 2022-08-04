@@ -1,10 +1,12 @@
+import pytris_cfg
+
 import arcade
 import copy
 from dataclasses import dataclass
 from enum import Enum
 from math import ceil
 import pyglet
-import random
+from random import shuffle
 from screeninfo import get_monitors
 # Constants
 DEFAULT_SCREEN_DIMS = [840, 1000]
@@ -346,11 +348,14 @@ class MyGame(arcade.Window):
             for row in range(INFO_GRID_DIMS[1]):
                 self.hold_grid_sprites[row][column].color = self.settings.colors[self.hold_grid[row][column]] + (self.settings.normal_opacity,)
 
+    # TODO add ability to restart
+    # TODO add high scores
+    # TODO show more stats
     def setup(self):
         self.game_phase = GamePhase.GENERATION
         # Generate the first bag
         self.bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
-        random.shuffle(self.bag)
+        shuffle(self.bag)
 
         # Determines if the player can swap the active piece with their hold
         self.hold_ready = True
@@ -512,7 +517,7 @@ class MyGame(arcade.Window):
         # Each bag has one of each tile, which ensures even distribution of pieces
         if len(self.bag) == PREVIEW_COUNT:
             self.new_bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
-            random.shuffle(self.new_bag)
+            shuffle(self.new_bag)
             self.bag.extend(self.new_bag)
 
         # Piece spawns partially outside of the visible grid, but tries to move down immediately; the lock phase is not started until it fails to move down naturally,
@@ -636,10 +641,10 @@ class MyGame(arcade.Window):
             eff_back_to_back_mp = SCORE_DATA['back_to_back_mp']
         else:
             eff_back_to_back_mp = 1
-        # T-Spin
 
         # If the active piece is a 'T', check for a T-Spin
         if self.active_piece.type == 'T':
+            # TODO overall description of what a T-Spin is
             # the indices of corners[] (after rotation is applied) correspond with the numbers in the diagram below
             # Hashes represent the piece, underscore represents a blank tile
             # 0#1
@@ -769,7 +774,6 @@ class MyGame(arcade.Window):
         return False
 
     # Translates the active piece by the given value, returns false if it fails
-    # TODO use for rotation
     def move_tiles(self, tiles: list[list[int]], x: int, y: int, center: list[int]=None) -> bool:
         # Add tile coordinates after translation to new_pos
         new_pos = [[tile[j] + [x, y][j] for j in range(2)] for tile in tiles]

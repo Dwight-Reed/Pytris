@@ -1,5 +1,8 @@
 # Automatically generated project-specific files
 pytris.cfg
+pytris_scores.txt
+# vscode stuff
+.vscode/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,4 +1,4 @@
-import pytris_cfg
+#import pytris_cfg
 
 import arcade
 import copy
@@ -241,7 +241,7 @@ class MyGame(arcade.Window):
         # Sets up handler for pressed keys
         self.keys = pyglet.window.key.KeyStateHandler()
         self.push_handlers(self.keys)
-        self.stats = game_statistics(0, [0, 0, 0], 0, 0, [0, 0, 0, 0], [0, 0])
+        self.stats = game_statistics(0, [0, 0, 0], 0, 1, [0, 0, 0, 0], [0, 0])
         # self.lines = []
 
     def create_grid(self, size: list[int], default_value) -> list[list[int]]:
@@ -744,22 +744,28 @@ class MyGame(arcade.Window):
         new_position = copy.deepcopy(self.active_piece)
 
         # Rotate pieces around the center | for each tile: new_pos = (y, -x) (relative to center piece)
-        # (not using list comprehension to improve readability)
-        for i in range(4):
-            for j in range(2):
-                rotated_piece.tiles[i][j] = [rotated_piece.center[j] + steps * (rotated_piece.tiles[i][1] - rotated_piece.center[1]),
-                                             -steps * ((rotated_piece.tiles[i][0] - rotated_piece.center[0]))]
+        rotated_piece.tiles = [[
+            rotated_piece.center[j] + [
+                        steps * (rotated_piece.tiles[i][1] - rotated_piece.center[1]),
+                        - steps * ((rotated_piece.tiles[i][0] - rotated_piece.center[0]))
+                    ][j] for j in range(2)
+                ] for i in range(4)]
 
         # The 5 offsets that should be applied if the piece does not have room to rotate
+        if self.active_piece.type == 'O':
+            test_count = 1
+        else:
+            test_count = 5
         offset_data = [[offsets[self.active_piece.type][self.active_piece.rotation][test][i] -
-                       offsets[self.active_piece.type][rotated_piece.rotation][test][i] for i in range(2)] for test in range(5)]
+                       offsets[self.active_piece.type][rotated_piece.rotation][test][i] for i in range(2)] for test in range(test_count)]
 
         # Attempt each of the 5 translations
         for test in range(5):
 
             # Set the tile positions according to the offset
             new_position = copy.deepcopy(rotated_piece.tiles)
-            self.move_tiles(new_position, offset_data[test][0], offset_data[test][1])
+            if not (offset_data[test][0] == 0 and offset_data[test][1] == 0):
+                self.move_tiles(new_position, offset_data[test][0], offset_data[test][1])
 
             # Check if the new tile positions are occupied
             if self.is_valid_pos(new_position):
@@ -777,7 +783,6 @@ class MyGame(arcade.Window):
     def move_tiles(self, tiles: list[list[int]], x: int, y: int, center: list[int]=None) -> bool:
         # Add tile coordinates after translation to new_pos
         new_pos = [[tile[j] + [x, y][j] for j in range(2)] for tile in tiles]
-
         if self.is_valid_pos(new_pos):
             tiles[:] = new_pos
             if center:

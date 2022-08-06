@@ -9,7 +9,7 @@ from os.path import exists
 import pyglet
 from random import shuffle
 from screeninfo import get_monitors
-
+TEST_VAR = False
 class MyGame(arcade.Window):
     # Load default settings
     def __init__(self):
@@ -25,10 +25,12 @@ class MyGame(arcade.Window):
         super().__init__(default_window_size[0], default_window_size[1], SCREEN_TITLE, resizable=True)
         self.scale = WindowScale
 
+        # Set default fall interval
         self.fall_interval = 1
+
+        # Set time since game start (duration of game shown in stats at end)
         self.cur_time = 0
 
-        self.settings = Settings
         # Create the main grid
         self.grid = self.create_grid(GRID_DIMS, '')
         self.grid_sprite_list = arcade.SpriteList()
@@ -64,9 +66,8 @@ class MyGame(arcade.Window):
         self.keys = pyglet.window.key.KeyStateHandler()
         self.push_handlers(self.keys)
 
-        # self.paused = False
-
         # Load settings from config file (new one is generated if it does not exist)
+        self.settings = Settings
         pytris_cfg.load_config(self.settings)
 
     def create_grid(self, size: list[int], default_value) -> list[list[int]]:
@@ -81,6 +82,7 @@ class MyGame(arcade.Window):
     def create_sprite_grid(self, size: list[int], visible_size: list[int], tile_size: int, line_width: int, position: list[int], sprite_list, sprite_list_2d):
         # Create a sprite list for batch drawing all the grid sprites
         sprite_list.clear()
+        # Create a 2d list of sprites (references to the main sprite list) for easy access
         sprite_list_2d.clear()
 
         # Create a list of solid-color sprites to represent each grid location
@@ -127,7 +129,7 @@ class MyGame(arcade.Window):
 
         self.scale.hold_pos = [self.scale.grid_pos[0] - self.scale.preview_size[0] - self.scale.info_offset,
             self.scale.grid_pos[1] + self.scale.grid_size[1] - self.scale.hold_size[1]]
-        # self.lines = []
+
         # Create new sprite grids with new parameters
         self.create_sprite_grid(GRID_DIMS, [GRID_DIMS[0], RENDERED_GRID_HEIGHT], self.scale.tile_size, self.scale.grid_line_width, self.scale.grid_pos, self.grid_sprite_list, self.grid_sprites)
         self.create_sprite_grid(PREVIEW_GRID_DIMS, PREVIEW_GRID_DIMS, self.scale.tile_size, self.scale.grid_line_width, self.scale.preview_pos, self.preview_grid_sprite_list, self.preview_grid_sprites)
@@ -137,7 +139,6 @@ class MyGame(arcade.Window):
         self.scale.font_size = 24
 
     # Updates sprite grid to match positions of tiles
-    # TODO: don't only redraw modified tiles
     def redraw_grid(self):
 
         # Adds the placed pieces to the sprite grid (and clears anything else)
@@ -149,20 +150,11 @@ class MyGame(arcade.Window):
         for tile in self.ghost.tiles:
             if not tile[1] >= RENDERED_GRID_HEIGHT:
                 self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
-                # self.grid_sprite_list[(tile[0] * (RENDERED_GRID_HEIGHT)) + tile[1]
-                #                       ].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
 
         # Draws the active piece (overwrites ghost tiles if overlapping)
         for tile in self.active_piece.tiles:
             if not tile[1] >= RENDERED_GRID_HEIGHT:
                 self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
-
-        # Change opacity of ActivePiece.center for debugging
-        # try:
-        #     self.grid_sprites[self.active_piece.center[1]][self.active_piece.center[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
-        # # Center is above grid
-        # except:
-        #     pass
 
         # Draw preview grid
         for column in range(PREVIEW_GRID_DIMS[0]):
@@ -174,9 +166,11 @@ class MyGame(arcade.Window):
             for row in range(INFO_GRID_DIMS[1]):
                 self.hold_grid_sprites[row][column].color = self.settings.colors[self.hold_grid[row][column]] + (self.settings.normal_opacity,)
 
-    # TODO add high scores
+    # Called at the beginning and when the restart keybind is pressed
     def setup(self):
+
         self.game_phase = GamePhase.GENERATION
+
         # Generate the first bag
         self.bag = ['I', 'J', 'L', 'O', 'S', 'T', 'Z']
         shuffle(self.bag)
@@ -215,7 +209,7 @@ class MyGame(arcade.Window):
         self.stats = game_statistics(0, [0, 0, 0], 0, 1, [0, 0, 0, 0], [0, 0])
         self.timers = {
             # Time until the active piece will move down automatically
-            'fall': 0.0,
+            'fall': self.fall_interval,
             # Time until the active piece will move down while the down key is pressed
             'drop_ARR': 0.0,
             # Auto Repeat Rate
@@ -229,10 +223,8 @@ class MyGame(arcade.Window):
         self.stats = game_statistics(0, [0, 0, 0, 0], 0, 1, [0, 0, 0, 0], [0, 0])
     def on_key_press(self, symbol, modifiers):
         cfg = self.settings
-
         if symbol == cfg.pause:
             self.pause(not self.paused)
-
         elif symbol == cfg.restart:
             self.setup()
 
@@ -443,6 +435,7 @@ class MyGame(arcade.Window):
     def place_piece(self):
         # End the game if the placed piece is completely outside the visible grid
         if min([self.ghost.tiles[i][1] for i in range(4)]) >= RENDERED_GRID_HEIGHT:
+            self.paused = False
             self.game_over('Lock Out')
 
         # Add the position of the ghost tiles to the main grid
@@ -719,12 +712,14 @@ class MyGame(arcade.Window):
     # Pause or unpause the game
     def pause(self, new_pause_state: bool):
         # If unpaused after the game has ended, reset the game
-        if new_pause_state and self.game_ended:
-            self.setup
+        if self.paused and self.game_ended:
+            self.setup()
         else:
             self.paused = new_pause_state
 
+
     def game_over(self, reason: str):
+        # Print scores to terminal (didn't have time to make a GUI for this)
         print(
             f'Game Over: {reason}\n'
             f'Score: {self.stats.score}\n'
@@ -751,20 +746,20 @@ class MyGame(arcade.Window):
                 except:
                     pass
             lines.reverse()
-            print(lines)
-            if len(lines) < MAX_SAVED_SCORES or self.stats.score >= lines[-1]:
+            if self.stats.score >= lines[-1]:
                 insort(lines, self.stats.score)
+                if len(lines) > MAX_SAVED_SCORES:
+                    lines.pop()
+                print('New High SCore!')
+        scores = ('\n'.join([str(line) for line in reversed(lines)]) + '\n')
+        print(f'High Scores:{scores}')
 
-
+        # Write scores to file
         with open(SCORE_FILE, 'w') as file:
-            file.write('\n'.join([str(line) for line in reversed(lines)]))
-            # file.writelines(reversed([str(line) for line in lines]))
-
+            file.write('\n'.join([str(line) for line in reversed(lines)]) + '\n')
 
         self.game_ended = True
         self.pause(True)
-        # self.setup()
-        # exit(0)
 
 def main():
     '''Main function'''

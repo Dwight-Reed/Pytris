@@ -9,27 +9,25 @@ from os.path import exists
 import pyglet
 from random import shuffle
 from screeninfo import get_monitors
-TEST_VAR = False
+
+
 class MyGame(arcade.Window):
     # Load default settings
     def __init__(self):
+
         # Set the default window size to be proportional to the primary monitor's resolution (to prevent the default size from varying based on dpi)
         for m in get_monitors():
             if m.is_primary:
                 default_window_size = [round(m.height*0.75*(840/1000)), round(m.height*0.75)]
                 break
+
         # If get_monitors() does not find a primary monitor, fall back to fixed resolution
         else:
             default_window_size = [1000, 840]
+
         # Call the parent class and set up the window
         super().__init__(default_window_size[0], default_window_size[1], SCREEN_TITLE, resizable=True)
         self.scale = WindowScale
-
-        # Set default fall interval
-        self.fall_interval = 1
-
-        # Set time since game start (duration of game shown in stats at end)
-        self.cur_time = 0
 
         # Create the main grid
         self.grid = self.create_grid(GRID_DIMS, '')
@@ -45,20 +43,10 @@ class MyGame(arcade.Window):
         self.hold_grid = self.create_grid(INFO_GRID_DIMS, 'background')
         self.hold_grid_sprite_list = arcade.SpriteList()
         self.hold_grid_sprites = []
+
         # Create object to store ghost tiles (indicates where a piece will be dropped on a hard drop)
         self.ghost = GhostPiece([[0, 0], [0, 0], [0, 0], [0, 0]], [0, 0])
 
-        # Initialize timers
-        self.timers = {
-            # Time until the active piece will move down automatically
-            'fall': 0.0,
-            # Time until the active piece will move down while the down key is pressed
-            'drop_ARR': 0.0,
-            # Auto Repeat Rate
-            'ARR': 0.0,
-            # Delayed Auto Shift
-            'DAS': 0.0
-        }
         self.game_phase = GamePhase
         self.fall_while_locking = False
 
@@ -71,7 +59,7 @@ class MyGame(arcade.Window):
         pytris_cfg.load_config(self.settings)
 
     def create_grid(self, size: list[int], default_value) -> list[list[int]]:
-        # Create a grid of strings that represent the piece that was placed (for determining the color), empty strings represent an empty tile
+        # Create a grid of strings that represent the type of piece occupying a tile (for determining the color), empty strings represent an empty tile
         grid = []
         for row in range(size[1]):
             grid.append([])
@@ -79,6 +67,7 @@ class MyGame(arcade.Window):
                 grid[row].append(default_value)
         return grid
 
+    # Create a grid of sprites to correspond with a normal grid
     def create_sprite_grid(self, size: list[int], visible_size: list[int], tile_size: int, line_width: int, position: list[int], sprite_list, sprite_list_2d):
         # Create a sprite list for batch drawing all the grid sprites
         sprite_list.clear()
@@ -100,7 +89,9 @@ class MyGame(arcade.Window):
 
     # Adjusts scaling when the window's size changes, this is automatically called once after __init__()
     def on_resize(self, width, height):
+        # Call the parent's resize function
         super().on_resize(width, height)
+
         # The size of the window
         self.scale.size = [width, height]
 
@@ -114,8 +105,14 @@ class MyGame(arcade.Window):
         self.scale.eff_tile_size = self.scale.tile_size + self.scale.grid_line_width
 
         # Calculate total size (in pixels) of each grid
-        self.scale.grid_size = [self.scale.eff_tile_size * GRID_DIMS[0], self.scale.eff_tile_size * RENDERED_GRID_HEIGHT]
-        self.scale.preview_size = [self.scale.eff_tile_size * INFO_GRID_DIMS[0], self.scale.eff_tile_size * INFO_GRID_DIMS[1] * PREVIEW_COUNT]
+        self.scale.grid_size = [
+            self.scale.eff_tile_size * GRID_DIMS[0],
+            self.scale.eff_tile_size * RENDERED_GRID_HEIGHT]
+
+        self.scale.preview_size = [
+            self.scale.eff_tile_size * INFO_GRID_DIMS[0],
+            self.scale.eff_tile_size * INFO_GRID_DIMS[1] * PREVIEW_COUNT]
+
         self.scale.hold_size = [self.scale.eff_tile_size * INFO_GRID_DIMS[i] for i in range(2)]
 
         # Position of the three grids, main grid is centered
@@ -124,16 +121,41 @@ class MyGame(arcade.Window):
         # How far preview and hold should be from the main grid
         self.scale.info_offset = self.scale.size[1] / 200
 
-        self.scale.preview_pos = [self.scale.grid_pos[0] + self.scale.grid_size[0] + self.scale.info_offset,
+        self.scale.preview_pos = [
+            self.scale.grid_pos[0] + self.scale.grid_size[0] + self.scale.info_offset,
             self.scale.grid_pos[1] + self.scale.grid_size[1] - self.scale.preview_size[1]]
 
-        self.scale.hold_pos = [self.scale.grid_pos[0] - self.scale.preview_size[0] - self.scale.info_offset,
+        self.scale.hold_pos = [
+            self.scale.grid_pos[0] - self.scale.preview_size[0] - self.scale.info_offset,
             self.scale.grid_pos[1] + self.scale.grid_size[1] - self.scale.hold_size[1]]
 
         # Create new sprite grids with new parameters
-        self.create_sprite_grid(GRID_DIMS, [GRID_DIMS[0], RENDERED_GRID_HEIGHT], self.scale.tile_size, self.scale.grid_line_width, self.scale.grid_pos, self.grid_sprite_list, self.grid_sprites)
-        self.create_sprite_grid(PREVIEW_GRID_DIMS, PREVIEW_GRID_DIMS, self.scale.tile_size, self.scale.grid_line_width, self.scale.preview_pos, self.preview_grid_sprite_list, self.preview_grid_sprites)
-        self.create_sprite_grid(INFO_GRID_DIMS,INFO_GRID_DIMS, self.scale.tile_size, self.scale.grid_line_width, self.scale.hold_pos, self.hold_grid_sprite_list, self.hold_grid_sprites)
+        self.create_sprite_grid(
+            GRID_DIMS,
+            [GRID_DIMS[0], RENDERED_GRID_HEIGHT],
+            self.scale.tile_size,
+            self.scale.grid_line_width,
+            self.scale.grid_pos,
+            self.grid_sprite_list,
+            self.grid_sprites)
+
+        self.create_sprite_grid(
+            PREVIEW_GRID_DIMS,
+            PREVIEW_GRID_DIMS,
+            self.scale.tile_size,
+            self.scale.grid_line_width,
+            self.scale.preview_pos,
+            self.preview_grid_sprite_list,
+            self.preview_grid_sprites)
+
+        self.create_sprite_grid(
+            INFO_GRID_DIMS,
+            INFO_GRID_DIMS,
+            self.scale.tile_size,
+            self.scale.grid_line_width,
+            self.scale.hold_pos,
+            self.hold_grid_sprite_list,
+            self.hold_grid_sprites)
 
         # Text size
         self.scale.font_size = 24
@@ -144,27 +166,34 @@ class MyGame(arcade.Window):
         # Adds the placed pieces to the sprite grid (and clears anything else)
         for column in range(GRID_DIMS[0]):
             for row in range(RENDERED_GRID_HEIGHT):
-                self.grid_sprites[row][column].color = self.settings.colors[self.grid[row][column]] + (self.settings.normal_opacity,)
+                self.grid_sprites[row][column].color = \
+                    self.settings.colors[self.grid[row][column]] + (self.settings.normal_opacity,)
 
         # Draws the ghost tiles
-        for tile in self.ghost.tiles:
-            if not tile[1] >= RENDERED_GRID_HEIGHT:
-                self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
+        # If the game ends, , don't redraw the ghost tiles (that haven't been updated)
+        if not self.game_ended:
+            for tile in self.ghost.tiles:
+                if not tile[1] >= RENDERED_GRID_HEIGHT:
+                    self.grid_sprites[tile[1]][tile[0]].color = \
+                        self.settings.colors[self.active_piece.type] + (self.settings.ghost_opacity,)
 
         # Draws the active piece (overwrites ghost tiles if overlapping)
         for tile in self.active_piece.tiles:
             if not tile[1] >= RENDERED_GRID_HEIGHT:
-                self.grid_sprites[tile[1]][tile[0]].color = self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
+                self.grid_sprites[tile[1]][tile[0]].color = \
+                    self.settings.colors[self.active_piece.type] + (self.settings.normal_opacity,)
 
         # Draw preview grid
         for column in range(PREVIEW_GRID_DIMS[0]):
             for row in range(PREVIEW_GRID_DIMS[1]):
-                self.preview_grid_sprites[row][column].color = self.settings.colors[self.preview_grid[row][column]] + (self.settings.normal_opacity,)
+                self.preview_grid_sprites[row][column].color = \
+                    self.settings.colors[self.preview_grid[row][column]] + (self.settings.normal_opacity,)
 
         # Draw hold grid
         for column in range(INFO_GRID_DIMS[0]):
             for row in range(INFO_GRID_DIMS[1]):
-                self.hold_grid_sprites[row][column].color = self.settings.colors[self.hold_grid[row][column]] + (self.settings.normal_opacity,)
+                self.hold_grid_sprites[row][column].color = \
+                    self.settings.colors[self.hold_grid[row][column]] + (self.settings.normal_opacity,)
 
     # Called at the beginning and when the restart keybind is pressed
     def setup(self):
@@ -184,6 +213,7 @@ class MyGame(arcade.Window):
         self.cur_time = 0
         self.hold = ''
         self.back_to_back_bonus = False
+
         # Clear main grid
         for i in range(GRID_DIMS[1]):
             for j in range(GRID_DIMS[0]):
@@ -199,14 +229,6 @@ class MyGame(arcade.Window):
             for j in range(INFO_GRID_DIMS[0]):
                 self.hold_grid[i][j] = 'background'
 
-        # Spawn the first piece
-        self.spawn_piece(False)
-
-        # Update preview for first bag
-        for i, type in enumerate(reversed(self.bag[:PREVIEW_COUNT])):
-            for tile in SPAWN_POSITIONS[type]:
-                self.preview_grid[(INFO_CENTER_SPAWN[1] + (i)) * 2 + tile[1]][INFO_CENTER_SPAWN[0] + tile[0]] = type
-        self.stats = game_statistics(0, [0, 0, 0], 0, 1, [0, 0, 0, 0], [0, 0])
         self.timers = {
             # Time until the active piece will move down automatically
             'fall': self.fall_interval,
@@ -221,6 +243,16 @@ class MyGame(arcade.Window):
         self.paused = False
         self.game_ended = False
         self.stats = game_statistics(0, [0, 0, 0, 0], 0, 1, [0, 0, 0, 0], [0, 0])
+        self.combo = 0
+
+        # Spawn the first piece
+        self.spawn_piece(False)
+
+        # Update preview for first bag
+        for i, type in enumerate(reversed(self.bag[:PREVIEW_COUNT])):
+            for tile in SPAWN_POSITIONS[type]:
+                self.preview_grid[(INFO_CENTER_SPAWN[1] + (i)) * 2 + tile[1]][INFO_CENTER_SPAWN[0] + tile[0]] = type
+
     def on_key_press(self, symbol, modifiers):
         cfg = self.settings
         if symbol == cfg.pause:
@@ -273,6 +305,9 @@ class MyGame(arcade.Window):
 
         elif symbol == cfg.hard_drop:
             self.place_piece()
+            return
+        else:
+            return
 
         self.update_ghost()
 
@@ -318,8 +353,6 @@ class MyGame(arcade.Window):
                 self.timers['ARR'] = self.settings.auto_repeat_rate
                 self.update_ghost()
 
-
-
     def on_update(self, delta_time):
         if not self.paused:
             self.cur_time += delta_time
@@ -336,6 +369,7 @@ class MyGame(arcade.Window):
                 self.locking()
 
             self.held_keys()
+
     # Generation Phase
     def spawn_piece(self, from_hold: bool):
         # Used for scoring T-Spins, see rotate_active for better description
@@ -346,7 +380,6 @@ class MyGame(arcade.Window):
                 self.hold = self.active_piece.type
                 self.active_piece.type = self.bag.pop(0)
                 self.update_preview()
-                # Draw hold grid
 
             # Swap active piece and hold
             else:
@@ -361,11 +394,15 @@ class MyGame(arcade.Window):
         self.active_piece.rotation = 0
 
         # Place tiles relative to the center
-        self.active_piece.tiles = [[CENTER_SPAWN[j] + SPAWN_POSITIONS[self.active_piece.type][i][j] for j in range(2)] for i in range(4)]
+        self.active_piece.tiles = [[
+            CENTER_SPAWN[j] + SPAWN_POSITIONS[self.active_piece.type][i][j]
+            for j in range(2)]
+            for i in range(4)]
 
         # If the new piece does not have room to spawn, the game is over
         if not self.is_valid_pos(self.active_piece.tiles):
             self.game_over('Block Out')
+            return
 
         # If the bag has fewer pieces than the preview is set to display, generate and append a new bag
         # Each bag has one of each tile, which ensures even distribution of pieces
@@ -437,6 +474,7 @@ class MyGame(arcade.Window):
         if min([self.ghost.tiles[i][1] for i in range(4)]) >= RENDERED_GRID_HEIGHT:
             self.paused = False
             self.game_over('Lock Out')
+            return
 
         # Add the position of the ghost tiles to the main grid
         # (the ghost tiles are always the position a piece will be placed)
@@ -449,9 +487,11 @@ class MyGame(arcade.Window):
         # Calculate score
         self.score()
 
+        # Eliminate any lines marked for clearing in the iterate phase
+        self.eliminate()
+
         # Round the score to an int (although the score never has a decimal value other than 0 aside from floating point imprecision)
         self.stats.score = round(self.stats.score)
-
         self.spawn_piece(False)
         self.hold_ready = True
         self.update_preview()
@@ -459,34 +499,26 @@ class MyGame(arcade.Window):
     # Iterate/Pattern/Eliminate Phase
     def iterate(self, rows: set[int]):
         self.game_phase = GamePhase.ITERATE
-        clears = []
+        self.clears = []
         # If a row has a value in each position, add it to the list of lines to be cleared
         for i in rows:
             for j in range(GRID_DIMS[0]):
                 if not self.grid[i][j]:
                     break
             else:
-                clears.append(i)
+                self.clears.append(i)
 
-        # Eliminate Phase
-        # Remove rows starting from the highest to prevent row numbers being offset
-        clears.sort()
-        for row in reversed(clears):
-            self.grid.pop(row)
-            # Add a new row at the top to replace the old row (This avoids moving every tile down)
-            self.grid.append([])
-            for j in range(GRID_DIMS[0]):
-                self.grid[-1].append('')
-
-        self.cleared_lines = len(clears)
+        self.cleared_lines = len(self.clears)
         self.stats.total_clears += self.cleared_lines
         # If a new level has been reached and does not exceed the maximum
-        if self.stats.total_clears // 10 > self.stats.level and self.stats.level < MAX_LEVEL:
-            self.stats.level += 1
-            # Calculate and apply new fall interval
-            self.fall_interval = pow((0.8 - (( self.stats.level - 1) * 0.007)), self.stats.level)
 
+    # Calculate scores
     def score(self):
+        # Indicates if score has been applied to prevent T-Spins getting extra points from clearing lines
+        scored = False
+        # increment combo
+        if self.cleared_lines > 0:
+            self.combo += 1
         self.game_phase = GamePhase.COMPLETION
         # Hard drop score, active piece is not moved on a hard drop, so the difference between it and the ghost is the number of lines dropped
         self.stats.score += (self.active_piece.center[1] - self.ghost.center[1]) * SCORE_DATA['hard_drop_mp']
@@ -500,7 +532,7 @@ class MyGame(arcade.Window):
         # If the active piece is a 'T' and the last movement was a rotation, check for a T-Spin
         if self.active_piece.type == 'T' and self.active_piece.rotation_point != -1:
             # A T-Spin/Mini T-Spin is when a 'T' piece is placed in a position where at least 3
-            # of the 4 corners diagonally adjacent to its center are occupied or out of bounds
+            # of the 4 corners diagonally adjacent to its center are occupied or out of bounds, or rotation point 5 is used
             # A rotation must be the last successful movement to count
 
             # the indices of corners[] (after rotation is applied) correspond with the numbers in the diagram below
@@ -525,12 +557,11 @@ class MyGame(arcade.Window):
             # If corners 0 and 1 are occupied or the final rotation used rotation point 4 (guideline says rotation point 5, but this is 0-indexed)
             if (corners[0] and corners[1] and (corners[2] or corners[3])) or self.active_piece.rotation_point == 4:
                 self.stats.score += SCORE_DATA['t_spin'][self.cleared_lines] * eff_back_to_back_mp * self.stats.level
-
                 self.stats.t_spin[self.cleared_lines] += 1
                 # A T-Spin without any clears does not reset the back-to-back bonus, but does not start it either
                 if self.cleared_lines > 0:
                     self.back_to_back_bonus = True
-                return
+                scored = True
 
             # Mini T-Spin
             # If at least 3 of the corners are occupied/out of bounds and the last movement was a rotation
@@ -539,18 +570,39 @@ class MyGame(arcade.Window):
                 self.stats.mini_t_spin[self.cleared_lines] += 1
                 if self.cleared_lines > 0:
                     self.back_to_back_bonus = True
-                return
+                scored = True
 
-        # Reset the back-to-back multiplier if the placement was not a tetris (i.e. 4 line clears)
-        if self.cleared_lines != 4:
-            eff_back_to_back_mp = 1
-        if self.cleared_lines > 0:
-            self.stats.score += SCORE_DATA['normal_clear'][self.cleared_lines - 1] * eff_back_to_back_mp * self.stats.level
+        # If T-Spin points were already awarded, don't add points for normal clears
+        if not scored:
+            # Reset the back-to-back multiplier if the placement was not a tetris (i.e. 4 line clears)
+            if self.cleared_lines != 4:
+                eff_back_to_back_mp = 1
+            if self.cleared_lines > 0:
+                self.stats.score += SCORE_DATA['normal_clear'][self.cleared_lines - 1] * eff_back_to_back_mp * self.stats.level
 
-        if self.cleared_lines == 4:
-            self.back_to_back_bonus = True
-        else:
-            self.back_to_back_bonus = False
+            if self.cleared_lines == 4:
+                self.back_to_back_bonus = True
+            else:
+                self.back_to_back_bonus = False
+
+        # Add combo score
+        if self.combo:
+            self.stats.score += (self.combo - 1) * SCORE_DATA['combo_mp'] * self.stats.level
+
+    def eliminate(self):
+        # Eliminate Phase
+        # Remove rows starting from the highest to prevent row numbers being offset
+        self.clears.sort()
+        for row in reversed(self.clears):
+            self.grid.pop(row)
+            # Add a new row at the top to replace the old row (This avoids moving every tile down)
+            self.grid.append([])
+            for j in range(GRID_DIMS[0]):
+                self.grid[-1].append('')
+        if self.stats.total_clears // 10 > self.stats.level and self.stats.level < MAX_LEVEL:
+            self.stats.level += 1
+            # Calculate and apply new fall interval
+            self.fall_interval = pow((0.8 - ((self.stats.level - 1) * 0.007)), self.stats.level)
 
     def on_draw(self):
         self.clear()
@@ -559,8 +611,11 @@ class MyGame(arcade.Window):
         self.redraw_grid()
 
         # Draw grid lines for the main grid (the grid itself will be drawn over)
-        arcade.draw_xywh_rectangle_filled(self.scale.grid_pos[0], self.scale.grid_pos[1],
-            GRID_DIMS[0] * self.scale.eff_tile_size + self.scale.grid_line_width, RENDERED_GRID_HEIGHT * self.scale.eff_tile_size + self.scale.grid_line_width,
+        arcade.draw_xywh_rectangle_filled(
+            self.scale.grid_pos[0],
+            self.scale.grid_pos[1],
+            GRID_DIMS[0] * self.scale.eff_tile_size + self.scale.grid_line_width,
+            RENDERED_GRID_HEIGHT * self.scale.eff_tile_size + self.scale.grid_line_width,
             self.settings.colors['grid_lines'])
 
         # Draw grids
@@ -569,8 +624,9 @@ class MyGame(arcade.Window):
         self.hold_grid_sprite_list.draw()
 
         # Draw score
-        arcade.draw_text(f'Score:\n{self.stats.score}\nLevel: {self.stats.level}',
-        self.scale.hold_pos[0], self.scale.hold_pos[1] - self.scale.font_size * 2,
+        arcade.draw_text(
+            f'Score:\n{self.stats.score}\nLevel: {self.stats.level}',
+            self.scale.hold_pos[0], self.scale.hold_pos[1] - self.scale.font_size * 2,
             font_size=self.scale.font_size,
             width=self.scale.hold_size[0],
             align='center',
@@ -579,16 +635,28 @@ class MyGame(arcade.Window):
         # Draw Hold label if the hold is empty (this is just to indicate that there is a hold feature,
         # but is unnecessary to render once a piece is in it)
         if not self.hold:
-            arcade.draw_text(f'Hold',
-            self.scale.hold_pos[0], self.scale.hold_pos[1] + (self.scale.hold_size[1] - self.scale.font_size) / 2,
+            arcade.draw_text(
+                f'Hold',
+                self.scale.hold_pos[0],
+                self.scale.hold_pos[1] + (self.scale.hold_size[1] - self.scale.font_size) / 2,
                 width=self.scale.hold_size[0],
                 font_size=self.scale.font_size,
                 align='center',
                 color=self.settings.colors['text'])
 
         if self.game_ended:
-            arcade.draw_xywh_rectangle_filled(self.scale.grid_pos[0], self.scale.grid_pos[1] + self.scale.grid_size[1] // 2 - self.scale.font_size * 2, self.scale.grid_size[1], self.scale.font_size * 4, self.settings.colors['background'])
-            arcade.draw_text(f'Game Over\nScore: {self.stats.score}', self.scale.grid_pos[0], self.scale.grid_pos[1] + self.scale.grid_size[1] // 2 + round(self.scale.font_size * 0.5), self.settings.colors['text'], self.scale.font_size, self.scale.grid_size[0], 'center')
+            arcade.draw_xywh_rectangle_filled(
+                self.scale.grid_pos[0],
+                self.scale.grid_pos[1] + self.scale.grid_size[1] // 2 - self.scale.font_size * 2,
+                self.scale.grid_size[1], self.scale.font_size * 4,
+                self.settings.colors['background'])
+
+            arcade.draw_text(
+                f'Game Over\nScore: {self.stats.score}',
+                self.scale.grid_pos[0], self.scale.grid_pos[1] + self.scale.grid_size[1] // 2 + round(self.scale.font_size * 0.5),
+                self.settings.colors['text'],
+                self.scale.font_size,
+                self.scale.grid_size[0], 'center')
 
     # Update the preview grid
     def update_preview(self):
@@ -627,19 +695,19 @@ class MyGame(arcade.Window):
         # for each step: for each tile: new_pos = (y, -x) (relative to center piece)
         rotated_piece.tiles = [[
             rotated_piece.center[j] + [
-                        steps * (rotated_piece.tiles[i][1] - rotated_piece.center[1]),
-                        - steps * ((rotated_piece.tiles[i][0] - rotated_piece.center[0]))][j]
-                    for j in range(2)]
-                for i in range(4)]
+                steps * (rotated_piece.tiles[i][1] - rotated_piece.center[1]),
+                - steps * ((rotated_piece.tiles[i][0] - rotated_piece.center[0]))][j]
+            for j in range(2)]
+            for i in range(4)]
 
         # The number of rotation tests to apply (1 for an 'O' piece, 5 for everything else)
         test_count = len(OFFSETS[self.active_piece.type][0])
 
         # The offsets for each test to be applied
         offset_data = [[
-                    OFFSETS[self.active_piece.type][self.active_piece.rotation][test][i] -
-                    OFFSETS[self.active_piece.type][rotated_piece.rotation][test][i]
-                for i in range(2)]
+            OFFSETS[self.active_piece.type][self.active_piece.rotation][test][i] -
+            OFFSETS[self.active_piece.type][rotated_piece.rotation][test][i]
+            for i in range(2)]
             for test in range(test_count)]
 
         # Attempt each of the 5 translations
@@ -663,7 +731,7 @@ class MyGame(arcade.Window):
         return False
 
     # Translates the active piece by the given value, returns false if it fails
-    def move_tiles(self, tiles: list[list[int]], x: int, y: int, center: list[int]=None) -> bool:
+    def move_tiles(self, tiles: list[list[int]], x: int, y: int, center: list[int] = None) -> bool:
         # Add tile coordinates after translation to new_pos
         new_pos = [[tile[j] + [x, y][j] for j in range(2)] for tile in tiles]
         if self.is_valid_pos(new_pos):
@@ -686,11 +754,12 @@ class MyGame(arcade.Window):
                 return False
 
         return True
+
     # Updates the current position of the ghost tiles
     def update_ghost(self):
         new_ghost = GhostPiece
         new_ghost.tiles = copy.deepcopy(self.active_piece.tiles)
-        new_ghost.center =  copy.deepcopy(self.active_piece.center)
+        new_ghost.center = copy.deepcopy(self.active_piece.center)
         for i in range(GRID_DIMS[1]):
             if not self.is_valid_pos(new_ghost.tiles):
                 return
@@ -717,7 +786,6 @@ class MyGame(arcade.Window):
         else:
             self.paused = new_pause_state
 
-
     def game_over(self, reason: str):
         # Print scores to terminal (didn't have time to make a GUI for this)
         print(
@@ -736,7 +804,7 @@ class MyGame(arcade.Window):
         # Create a new score file if it does not exist
         if not exists(SCORE_FILE):
             with open(SCORE_FILE, 'w') as file:
-                pass
+                file.write()
 
         with open(SCORE_FILE, 'r') as file:
             lines = []
@@ -746,20 +814,25 @@ class MyGame(arcade.Window):
                 except:
                     pass
             lines.reverse()
-            if self.stats.score >= lines[-1]:
-                insort(lines, self.stats.score)
-                if len(lines) > MAX_SAVED_SCORES:
-                    lines.pop()
-                print('New High SCore!')
-        scores = ('\n'.join([str(line) for line in reversed(lines)]) + '\n')
-        print(f'High Scores:{scores}')
+            add_score = False
+            if len(lines) == 0:
+                add_score = True
+            elif self.stats.score >= lines[0]:
+                add_score = True
+            if add_score:
+                print('New High Score!')
+            insort(lines, self.stats.score)
+            if len(lines) > MAX_SAVED_SCORES:
+                lines.pop()
+        scores = ('\n'.join([str(line) for line in reversed(lines)]))
+        print(f'High Scores:\n{scores}')
 
         # Write scores to file
         with open(SCORE_FILE, 'w') as file:
-            file.write('\n'.join([str(line) for line in reversed(lines)]) + '\n')
-
+            file.write(scores + '\n')
         self.game_ended = True
         self.pause(True)
+
 
 def main():
     '''Main function'''

@@ -81,8 +81,11 @@ SCORE_DATA = {
     't_spin': [400, 800, 1200, 1600],
     # Multiplier for getting more than 1 Tetris (4-line clear) and/or T-Spin/Mini T-Spin clears in a row
     'back_to_back_mp': 1.5,
+    # Points awarded for each tile a piece is dropped
     'soft_drop_mp': 1,
-    'hard_drop_mp': 2
+    'hard_drop_mp': 2,
+    #  Multiplier for combos
+    'combo_mp': 50
 }
 # TODO: make defaults compliant with guideline, add control customization
 @dataclass
